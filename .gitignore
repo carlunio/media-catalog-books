@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.duckdb
+*.bak
+.env
+.streamlit/
+.pytest_cache/
+.ruff_cache/
+notebooks/
+data/

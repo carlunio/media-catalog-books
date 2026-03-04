@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+streamlit
+duckdb
+requests
+ollama
+pillow
+pillow-heif
+openai
+langgraph
+
+[dev]
+pytest
+ruff
+black

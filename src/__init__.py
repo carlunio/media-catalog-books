@@ -1,0 +1,1 @@
+"""media-catalog-books package."""

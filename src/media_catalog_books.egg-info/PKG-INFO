@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: media-catalog-books
+Version: 0.1.0
+Requires-Python: >=3.12
+License-File: LICENSE
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: streamlit
+Requires-Dist: duckdb
+Requires-Dist: requests
+Requires-Dist: ollama
+Requires-Dist: pillow
+Requires-Dist: pillow-heif
+Requires-Dist: openai
+Requires-Dist: langgraph
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Dynamic: license-file

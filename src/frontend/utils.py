@@ -1,0 +1,314 @@
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+
+import requests
+import streamlit as st
+
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+WORKFLOW_STAGES = ("ocr", "metadata", "catalog", "cover")
+BLOCK_OPTIONS = ("A", "B", "C")
+MODULE_NAME_PATTERN = re.compile(r"^\d{2}$")
+
+GLOBAL_SELECTED_BOOK_KEY = "global_selected_book_id"
+GLOBAL_SELECTED_BLOCK_KEY = "global_selected_block"
+GLOBAL_SELECTED_MODULE_KEY = "global_selected_module"
+THEME_APPLIED_KEY = "_ui_theme_applied"
+
+THEME_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@600&display=swap');
+
+:root {
+  --bg: #f6f3ee;
+  --panel: rgba(255, 255, 255, 0.88);
+  --ink: #2c2420;
+  --muted: #6a5f56;
+  --accent: #996515;
+  --accent-2: #1f5e5b;
+}
+
+html, body, [class*="css"] {
+  font-family: "Manrope", sans-serif;
+}
+
+.stApp {
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 6% 4%, rgba(153, 101, 21, 0.14), transparent 25%),
+    radial-gradient(circle at 98% 6%, rgba(31, 94, 91, 0.14), transparent 26%),
+    linear-gradient(180deg, #f9f6f2 0%, var(--bg) 100%);
+}
+
+h1, h2, h3 {
+  font-family: "IBM Plex Serif", serif;
+  color: #2a231e;
+}
+
+[data-testid="stButton"] > button {
+  border-radius: 10px;
+  border: 1px solid rgba(153, 101, 21, 0.3);
+  background: linear-gradient(180deg, #b2791f, var(--accent));
+  color: #fff8ed;
+  font-weight: 700;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+  background: linear-gradient(180deg, rgba(153, 101, 21, 0.08), rgba(31, 94, 91, 0.06));
+}
+
+[data-testid="stDataFrame"], [data-testid="stTable"] {
+  background: var(--panel);
+  border-radius: 12px;
+}
+</style>
+"""
+
+
+def _apply_theme() -> None:
+    already = bool(st.session_state.get(THEME_APPLIED_KEY, False))
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    if not already:
+        st.session_state[THEME_APPLIED_KEY] = True
+
+
+def configure_page(title: str = "Media Catalog Books") -> None:
+    try:
+        st.set_page_config(page_title=title, layout="wide")
+    except Exception:
+        pass
+    _apply_theme()
+
+
+def _url(path: str) -> str:
+    return f"{API_URL}{path}"
+
+
+def _covers_root() -> Path:
+    raw = os.getenv("COVERS_DIR", "data/input")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return path
+
+
+def list_existing_modules(block: str) -> list[str]:
+    block_text = str(block or "").strip().upper()
+    if block_text not in BLOCK_OPTIONS:
+        return []
+
+    block_dir = _covers_root() / block_text
+    if not block_dir.exists() or not block_dir.is_dir():
+        return []
+
+    modules: list[str] = []
+    for child in sorted(block_dir.iterdir()):
+        if child.name.startswith("."):
+            continue
+        if child.is_dir() and MODULE_NAME_PATTERN.fullmatch(child.name):
+            modules.append(child.name)
+
+    return modules
+
+
+def api_get(path: str, *, timeout: float | None = 120.0, **kwargs) -> Any:
+    response = requests.get(_url(path), timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response.json()
+
+
+def api_post(path: str, *, timeout: float | None = 120.0, **kwargs) -> Any:
+    response = requests.post(_url(path), timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response.json()
+
+
+def api_put(path: str, *, timeout: float | None = 120.0, **kwargs) -> Any:
+    response = requests.put(_url(path), timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response.json()
+
+
+def show_backend_status() -> None:
+    last_exc: Exception | None = None
+    for attempt in range(12):
+        try:
+            api_get("/health", timeout=3.0)
+            st.success(f"Backend activo: {API_URL}")
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 11:
+                time.sleep(0.4)
+
+    st.error(f"Backend no disponible: {API_URL} ({last_exc})")
+
+
+def load_stats(*, block: str | None = None, module: str | None = None) -> dict[str, int]:
+    try:
+        params: dict[str, Any] = {}
+        if block and module:
+            params["block"] = block
+            params["module"] = module
+
+        payload = api_get("/stats", params=params, timeout=8.0)
+        if isinstance(payload, dict):
+            return {key: int(value) for key, value in payload.items() if isinstance(value, (int, float))}
+    except Exception:
+        pass
+
+    return {
+        "total": 0,
+        "needs_ocr": 0,
+        "needs_metadata": 0,
+        "needs_catalog": 0,
+        "needs_cover": 0,
+        "needs_workflow_review": 0,
+    }
+
+
+def get_selected_book_id() -> str | None:
+    value = st.session_state.get(GLOBAL_SELECTED_BOOK_KEY)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def set_selected_book_id(book_id: str | None) -> None:
+    text = str(book_id or "").strip()
+    if text:
+        st.session_state[GLOBAL_SELECTED_BOOK_KEY] = text
+
+
+def get_selected_scope() -> tuple[str, str | None]:
+    block = str(st.session_state.get(GLOBAL_SELECTED_BLOCK_KEY, "A") or "A").strip().upper()
+    if block not in BLOCK_OPTIONS:
+        block = "A"
+
+    available_modules = list_existing_modules(block)
+
+    raw_module = st.session_state.get(GLOBAL_SELECTED_MODULE_KEY)
+    module_text = str(raw_module or "").strip().zfill(2) if raw_module else ""
+
+    module: str | None
+    if module_text and module_text in available_modules:
+        module = module_text
+    elif available_modules:
+        module = available_modules[0]
+    else:
+        module = None
+
+    st.session_state[GLOBAL_SELECTED_BLOCK_KEY] = block
+    st.session_state[GLOBAL_SELECTED_MODULE_KEY] = module or ""
+    return block, module
+
+
+def set_selected_scope(block: str, module: str | None) -> tuple[str, str | None]:
+    block_text = str(block or "A").strip().upper()
+    if block_text not in BLOCK_OPTIONS:
+        block_text = "A"
+
+    available_modules = list_existing_modules(block_text)
+
+    module_text = str(module or "").strip().zfill(2) if module else ""
+    chosen_module: str | None
+    if module_text and module_text in available_modules:
+        chosen_module = module_text
+    elif available_modules:
+        chosen_module = available_modules[0]
+    else:
+        chosen_module = None
+
+    st.session_state[GLOBAL_SELECTED_BLOCK_KEY] = block_text
+    st.session_state[GLOBAL_SELECTED_MODULE_KEY] = chosen_module or ""
+    return block_text, chosen_module
+
+
+def scope_params(block: str, module: str | None) -> dict[str, str]:
+    module_text = str(module or "").strip()
+    if not module_text:
+        return {}
+    return {"block": str(block).strip().upper(), "module": module_text.zfill(2)}
+
+
+def select_module_scope(*, key_prefix: str, title: str = "Modulo activo") -> tuple[str, str | None]:
+    current_block, current_module = get_selected_scope()
+
+    st.caption(title)
+    col_block, col_module = st.columns([1, 1])
+    with col_block:
+        block = st.selectbox(
+            "Bloque",
+            BLOCK_OPTIONS,
+            index=BLOCK_OPTIONS.index(current_block),
+            key=f"{key_prefix}_block",
+        )
+
+    available_modules = list_existing_modules(block)
+
+    with col_module:
+        if available_modules:
+            default_module = current_module if current_module in available_modules else available_modules[0]
+            module = st.selectbox(
+                "Modulo",
+                available_modules,
+                index=available_modules.index(default_module),
+                key=f"{key_prefix}_module",
+            )
+        else:
+            module = None
+            st.caption("Sin modulos disponibles")
+
+    selected_block, selected_module = set_selected_scope(block, module)
+
+    if not selected_module:
+        st.warning(
+            f"No hay carpetas de modulo (01..99) para el bloque {selected_block} en "
+            f"{_covers_root() / selected_block}."
+        )
+
+    return selected_block, selected_module
+
+
+def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
+    ids = [str(row.get("id") or "").strip() for row in rows]
+    ids = [item for item in ids if item]
+    if not ids:
+        raise ValueError("No hay IDs disponibles")
+
+    labels = {}
+    for row in rows:
+        book_id = str(row.get("id") or "").strip()
+        if not book_id:
+            continue
+        title = str((row.get("catalog") or {}).get("titulo") or "").strip() or "(sin titulo)"
+        stage = str(row.get("pipeline_stage") or "unknown")
+        review = " | review" if bool(row.get("workflow_needs_review")) else ""
+        block = str(row.get("block") or "").strip()
+        module = str(row.get("module") or "").strip()
+        scope = f"{block}/{module}" if block and module else "--"
+        labels[book_id] = f"{book_id} | {scope} | {title} | {stage}{review}"
+
+    preferred = get_selected_book_id()
+    index = ids.index(preferred) if preferred in ids else 0
+    selected = st.selectbox(label, ids, index=index, key=key, format_func=lambda value: labels.get(value, value))
+    set_selected_book_id(selected)
+    return selected
+
+
+@st.cache_data(ttl=30)
+def load_ollama_models() -> list[str]:
+    payload = api_get("/models/ollama", timeout=6.0)
+    if not isinstance(payload, dict):
+        return []
+
+    models = payload.get("models", [])
+    if not isinstance(models, list):
+        return []
+
+    cleaned = [str(item).strip() for item in models if str(item).strip()]
+    return sorted(set(cleaned))
