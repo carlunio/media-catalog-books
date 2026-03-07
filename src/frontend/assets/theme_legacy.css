@@ -1,0 +1,207 @@
+@import url("https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&family=Source+Sans+3:wght@400;600;700&display=swap");
+
+:root {
+  --lg-bg: #84afa2;
+  --lg-bg-soft: #92bab0;
+  --lg-surface: rgba(255, 255, 255, 0.9);
+  --lg-surface-strong: rgba(255, 255, 255, 0.96);
+  --lg-sidebar: #547286;
+  --lg-ink: #2f3a41;
+  --lg-muted: #40515a;
+  --lg-gold: #d4b46e;
+  --lg-gold-dark: #b89a5e;
+  --lg-border: rgba(84, 114, 134, 0.24);
+}
+
+html,
+body,
+[class*="css"] {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  color: var(--lg-ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Roboto", sans-serif;
+  font-weight: 700;
+  color: #3f5563;
+  letter-spacing: 0.02em;
+}
+
+[data-testid="stAppViewContainer"] > .main {
+  background:
+    radial-gradient(980px 380px at 2% -10%, rgba(212, 180, 110, 0.22), transparent 54%),
+    radial-gradient(760px 300px at 102% -12%, rgba(84, 114, 134, 0.22), transparent 60%),
+    linear-gradient(180deg, var(--lg-bg-soft) 0%, var(--lg-bg) 100%);
+}
+
+[data-testid="stHeader"] {
+  background: rgba(84, 114, 134, 0.92);
+}
+
+[data-testid="stSidebar"] > div:first-child {
+  background: linear-gradient(180deg, #607f94 0%, var(--lg-sidebar) 100%);
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+[data-testid="stSidebar"] .stMarkdown,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+  color: #f4f8fb;
+}
+
+.block-container {
+  max-width: 1260px;
+  padding-top: 1rem;
+  padding-bottom: 2rem;
+}
+
+div[data-testid="stMetric"] {
+  background: var(--lg-surface);
+  border: 1px solid var(--lg-border);
+  border-radius: 12px;
+  padding: 0.32rem 0.7rem;
+  box-shadow: 0 10px 22px -20px rgba(20, 37, 46, 0.65);
+}
+
+div[data-testid="stMetricLabel"] {
+  color: #526672;
+}
+
+div[data-testid="stMetricValue"] {
+  color: #2c3941;
+}
+
+[data-testid="stTextInput"] > div > div > input,
+[data-testid="stTextArea"] textarea,
+[data-baseweb="select"] > div,
+[data-testid="stNumberInput"] input {
+  background: var(--lg-surface-strong);
+  border: 1px solid rgba(84, 114, 134, 0.4);
+  border-radius: 10px;
+  color: var(--lg-ink);
+}
+
+[data-testid="stTextInput"] > div > div > input:focus,
+[data-testid="stTextArea"] textarea:focus,
+[data-baseweb="select"] > div:focus-within,
+[data-testid="stNumberInput"] input:focus {
+  border-color: rgba(212, 180, 110, 0.9);
+  box-shadow: 0 0 0 1px rgba(212, 180, 110, 0.35);
+}
+
+[data-testid="stButton"] > button {
+  border-radius: 10px;
+  border: 1px solid rgba(184, 154, 94, 0.7);
+  background: linear-gradient(180deg, #dfc17f 0%, var(--lg-gold) 100%);
+  color: #2d2514;
+  font-weight: 700;
+  box-shadow: 0 10px 18px -16px rgba(40, 34, 19, 0.9);
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+[data-testid="stButton"] > button:hover {
+  background: linear-gradient(180deg, #d7b56b 0%, var(--lg-gold-dark) 100%);
+  transform: translateY(-1px);
+}
+
+[data-testid="stAlertContainer"] > div,
+[data-testid="stExpander"],
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+  border-radius: 12px;
+  border: 1px solid var(--lg-border);
+  background: var(--lg-surface);
+}
+
+[data-testid="stSegmentedControl"] {
+  background: var(--lg-surface);
+  border: 1px solid var(--lg-border);
+  border-radius: 999px;
+  padding: 0.15rem;
+}
+
+[data-testid="stSegmentedControl"] button[aria-checked="true"] {
+  background: linear-gradient(180deg, #5f8198, #4e6c80);
+  color: #f6fbff;
+}
+
+.mc-hero {
+  border: 1px solid rgba(84, 114, 134, 0.32);
+  border-radius: 18px;
+  padding: 1.1rem;
+  margin-bottom: 0.9rem;
+  background:
+    radial-gradient(420px 170px at 8% -12%, rgba(212, 180, 110, 0.23), transparent 70%),
+    radial-gradient(360px 160px at 94% -15%, rgba(84, 114, 134, 0.22), transparent 72%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(248, 250, 251, 0.93));
+  box-shadow: 0 16px 28px -25px rgba(38, 53, 62, 0.7);
+}
+
+.mc-kicker {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  font-family: "Roboto", sans-serif;
+  letter-spacing: 0.12em;
+  color: #8a7140;
+  margin-bottom: 0.2rem;
+}
+
+.mc-hero-title {
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  margin: 0;
+  color: #3f5563;
+  text-transform: uppercase;
+}
+
+.mc-hero-sub {
+  margin: 0.45rem 0 0 0;
+  color: var(--lg-muted);
+  font-size: 1rem;
+}
+
+.mc-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(145px, 1fr));
+  gap: 0.62rem;
+  margin-top: 0.9rem;
+}
+
+.mc-stage-card {
+  border: 1px solid rgba(84, 114, 134, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.56rem 0.62rem;
+}
+
+.mc-stage-index {
+  display: inline-block;
+  min-width: 1.35rem;
+  text-align: center;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #70582a;
+  background: rgba(212, 180, 110, 0.28);
+  margin-right: 0.26rem;
+}
+
+.mc-stage-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #425764;
+}
+
+@media (max-width: 1100px) {
+  .mc-stage-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .mc-stage-grid {
+    grid-template-columns: 1fr;
+  }
+}

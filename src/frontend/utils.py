@@ -16,61 +16,39 @@ GLOBAL_SELECTED_BOOK_KEY = "global_selected_book_id"
 GLOBAL_SELECTED_BLOCK_KEY = "global_selected_block"
 GLOBAL_SELECTED_MODULE_KEY = "global_selected_module"
 THEME_APPLIED_KEY = "_ui_theme_applied"
+THEME_CSS_ENV_VAR = "FRONTEND_THEME_CSS"
+DEFAULT_THEME_CSS_PATH = Path(__file__).resolve().parent / "assets" / "theme.css"
 
-THEME_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@600&display=swap');
 
-:root {
-  --bg: #f6f3ee;
-  --panel: rgba(255, 255, 255, 0.88);
-  --ink: #2c2420;
-  --muted: #6a5f56;
-  --accent: #996515;
-  --accent-2: #1f5e5b;
-}
+def _resolve_theme_css_path() -> Path:
+    raw = str(os.getenv(THEME_CSS_ENV_VAR, "") or "").strip()
+    if not raw:
+        return DEFAULT_THEME_CSS_PATH
 
-html, body, [class*="css"] {
-  font-family: "Manrope", sans-serif;
-}
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
 
-.stApp {
-  color: var(--ink);
-  background:
-    radial-gradient(circle at 6% 4%, rgba(153, 101, 21, 0.14), transparent 25%),
-    radial-gradient(circle at 98% 6%, rgba(31, 94, 91, 0.14), transparent 26%),
-    linear-gradient(180deg, #f9f6f2 0%, var(--bg) 100%);
-}
+    candidate_in_assets = DEFAULT_THEME_CSS_PATH.parent / path
+    if candidate_in_assets.exists():
+        return candidate_in_assets
 
-h1, h2, h3 {
-  font-family: "IBM Plex Serif", serif;
-  color: #2a231e;
-}
+    return (Path.cwd() / path).resolve()
 
-[data-testid="stButton"] > button {
-  border-radius: 10px;
-  border: 1px solid rgba(153, 101, 21, 0.3);
-  background: linear-gradient(180deg, #b2791f, var(--accent));
-  color: #fff8ed;
-  font-weight: 700;
-}
 
-[data-testid="stSidebar"] > div:first-child {
-  background: linear-gradient(180deg, rgba(153, 101, 21, 0.08), rgba(31, 94, 91, 0.06));
-}
-
-[data-testid="stDataFrame"], [data-testid="stTable"] {
-  background: var(--panel);
-  border-radius: 12px;
-}
-</style>
-"""
+def _load_theme_css() -> str:
+    css_path = _resolve_theme_css_path()
+    try:
+        return css_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _apply_theme() -> None:
     already = bool(st.session_state.get(THEME_APPLIED_KEY, False))
-    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    css = _load_theme_css()
+    if css:
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
     if not already:
         st.session_state[THEME_APPLIED_KEY] = True
 

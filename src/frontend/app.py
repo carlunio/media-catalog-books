@@ -19,20 +19,25 @@ except ModuleNotFoundError:  # pragma: no cover
 
 configure_page()
 
-st.title("Media Catalog Books")
-st.caption("Refactor de book_catalog_v0.3 con FastAPI + LangGraph + DuckDB")
-
 st.markdown(
     """
-Pipeline operativo:
-
-0. Orquestacion LangGraph
-1. Ingesta de imagenes de creditos
-2. OCR + ISBN
-3. Metadatos de APIs
-4. Consolidacion catalografica
-5. Portada y exportacion
-"""
+<div class="mc-hero">
+  <div class="mc-kicker">Media Catalog Books</div>
+  <h1 class="mc-hero-title">Catalogacion por bloques, modulo a modulo</h1>
+  <p class="mc-hero-sub">
+    Opera la cadena completa con FastAPI + LangGraph + DuckDB:
+    ingesta, OCR, ISBN, metadatos y consolidacion.
+  </p>
+  <div class="mc-stage-grid">
+    <div class="mc-stage-card"><span class="mc-stage-index">0</span><span class="mc-stage-title">Orquestacion</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">1</span><span class="mc-stage-title">Ingesta</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">OCR + ISBN</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Ejecucion por etapa</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">4</span><span class="mc-stage-title">Exportacion</span></div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
 )
 
 show_backend_status()
@@ -52,4 +57,4 @@ selected_book = get_selected_book_id()
 if selected_book:
     st.sidebar.caption(f"Libro seleccionado: {selected_book}")
 
-st.info("Usa el menu lateral para recorrer cada fase del proceso.")
+st.info("Usa el menu lateral para entrar en cada fase del flujo.")
