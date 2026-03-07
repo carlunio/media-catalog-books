@@ -44,6 +44,7 @@ endif
 
 BACKEND_APP := src.backend.main:app
 FRONTEND_APP := $(MAKEFILE_DIR)/src/frontend/app.py
+INIT_DB_SCRIPT := $(MAKEFILE_DIR)/scripts/init_db.py
 
 # =========================
 # PORTS
@@ -54,7 +55,7 @@ FRONT_PORT ?= 8501
 # =========================
 # PHONY
 # =========================
-.PHONY: setup install dev-back dev-front dev stop stop-back stop-front restart clean lint format
+.PHONY: setup install init-db dev-back dev-front dev stop stop-back stop-front restart clean lint format
 .PHONY: ensure-env
 
 setup:
@@ -68,6 +69,9 @@ install:
 ensure-env:
 	@$(PYTHON_BOOTSTRAP) -c "import pathlib, sys; sys.exit(0 if pathlib.Path(r'$(PYTHON)').exists() else 1)" || $(MAKE) setup
 	@$(PYTHON) -c "import importlib.util, sys; mods=('uvicorn','streamlit','fastapi'); sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)" || $(MAKE) install
+
+init-db: ensure-env
+	$(PYTHON) $(INIT_DB_SCRIPT)
 
 dev-back:
 ifneq ($(SKIP_ENSURE),1)
@@ -85,7 +89,7 @@ endif
 	@$(MAKE) stop-front
 	$(STREAMLIT) run $(FRONTEND_APP) --server.port $(FRONT_PORT)
 
-dev: ensure-env
+dev: ensure-env init-db
 	$(MAKE) -j 2 SKIP_ENSURE=1 dev-back dev-front
 
 stop-back:
