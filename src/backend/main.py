@@ -271,25 +271,22 @@ def update_book_ocr(book_id: str, payload: UpdateOcrRequest):
         final_isbn = str(derived.get("isbn"))
         isbn_source = str(derived.get("source") or "derived_from_text")
 
+    derived_candidates = derived.get("raw_candidates") if isinstance(derived.get("raw_candidates"), list) else []
+    compact_candidates = [str(item) for item in derived_candidates[:5] if str(item).strip()]
+
     trace = {
         "source": "manual_update",
-        "isbn_validation": {
-            "rules": [
-                "regex candidate extraction",
-                "ISBN-10 checksum validation",
-                "ISBN-13 checksum validation",
-                "OCR normalization (I/L->1, O->0) before revalidation",
-            ],
+        "isbn_extraction": {
+            "provider": "manual",
+            "source": isbn_source,
+            "isbn_raw": isbn_raw_value,
+            "isbn": final_isbn,
+            "is_valid": bool(final_isbn),
+            "candidates": compact_candidates,
+            "candidates_count": len(derived_candidates),
             "manual_input": {
                 "isbn_raw": manual_isbn_raw,
                 "isbn": manual_isbn,
-            },
-            "derived_from_text": derived,
-            "final": {
-                "isbn_raw": isbn_raw_value,
-                "isbn": final_isbn,
-                "is_valid": bool(final_isbn),
-                "source": isbn_source,
             },
         },
     }
@@ -311,7 +308,20 @@ def update_book_ocr(book_id: str, payload: UpdateOcrRequest):
         "isbn_raw": isbn_raw_value,
         "isbn_valid": bool(final_isbn),
         "isbn_source": isbn_source,
-        "validation": trace["isbn_validation"],
+        "validation": {
+            "manual_input": {
+                "isbn_raw": manual_isbn_raw,
+                "isbn": manual_isbn,
+            },
+            "derived_candidates": compact_candidates,
+            "derived_candidates_count": len(derived_candidates),
+            "final": {
+                "isbn_raw": isbn_raw_value,
+                "isbn": final_isbn,
+                "is_valid": bool(final_isbn),
+                "source": isbn_source,
+            },
+        },
     }
 
 

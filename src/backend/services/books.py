@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..config import DEFAULT_COVERS_DIR
 from ..database import get_connection
 from ..normalizers import extract_book_id_from_path, normalize_book_id, split_book_id
 
@@ -10,6 +11,85 @@ STAGES = ("ocr", "metadata", "catalog", "cover")
 PAYLOAD_TYPES = {"metadata", "catalog", "ocr_trace"}
 VALID_BLOCKS = ("A", "B", "C")
 MODULE_DIR_PATTERN = re.compile(r"^\d{2}$")
+METADATA_PROVIDER_MAP = (
+    ("google", "google"),
+    ("isbndb", "isbndb"),
+    ("open_library", "openlibrary"),
+)
+BOOK_ALLOWED_VALUES: list[tuple[str, str]] = [
+    ("edicion", "1ª edición"),
+    ("edicion", "2ª edición"),
+    ("edicion", "3ª edición"),
+    ("edicion", "4ª edición"),
+    ("edicion", "5ª edición o posteriores"),
+    ("edicion", "Edición especial"),
+    ("edicion", "Edición limitada"),
+    ("edicion", "Edición ilustrada"),
+    ("edicion", "Edición internacional"),
+    ("edicion", "Edición para el profesor"),
+    ("numero_impresion", "1ª impresión"),
+    ("numero_impresion", "2ª impresión"),
+    ("numero_impresion", "3ª impresión"),
+    ("numero_impresion", "4ª impresión"),
+    ("numero_impresion", "5ª impresión o posteriores"),
+    ("estado_stock", "En venta"),
+    ("estado_stock", "Vendido"),
+    ("estado_stock", "Extraviado"),
+    ("estado_carga", "Subido"),
+    ("estado_carga", "Para subir"),
+    ("estado_carga", "Para actualizar"),
+    ("estado_carga", "Más tarde"),
+    ("tipo_articulo", "Libros"),
+    ("tipo_articulo", "Mapas"),
+    ("tipo_articulo", "Manuscritos y coleccionismo de papel"),
+    ("tipo_articulo", "Comics"),
+    ("tipo_articulo", "Revistas y publicaciones"),
+    ("tipo_articulo", "Arte, grabados y pósters"),
+    ("tipo_articulo", "Partituras"),
+    ("tipo_articulo", "Fotografías"),
+    ("estado_conservacion", "Nuevo"),
+    ("estado_conservacion", "Como nuevo"),
+    ("estado_conservacion", "Excelente"),
+    ("estado_conservacion", "Muy bien"),
+    ("estado_conservacion", "Bien"),
+    ("estado_conservacion", "Aceptable"),
+    ("estado_conservacion", "Regular"),
+    ("estado_conservacion", "Pobre"),
+    ("estado_cubierta", "Nuevo"),
+    ("estado_cubierta", "Como nuevo"),
+    ("estado_cubierta", "Excelente"),
+    ("estado_cubierta", "Muy bien"),
+    ("estado_cubierta", "Bien"),
+    ("estado_cubierta", "Regular"),
+    ("estado_cubierta", "Mal"),
+    ("estado_cubierta", "Sin cubierta"),
+    ("dedicatorias", "Firmado por el autor o artista"),
+    ("dedicatorias", "Firmado por los autores o artistas"),
+    ("dedicatorias", "Firmado e inscrito por el autor o artista"),
+    ("dedicatorias", "Inscrito por el autor o artista"),
+    ("dedicatorias", "Firmado por el ilustrador"),
+    ("dedicatorias", "Inscrito por el ilustrador"),
+    ("plantilla_envio", "A"),
+    ("plantilla_envio", "B"),
+    ("catalogo", "ejemplo 1"),
+    ("catalogo", "ejemplo 2"),
+    ("categoria", "Ensayo"),
+    ("categoria", "Novela"),
+    ("categoria", "Poesía"),
+    ("categoria", "Cuentos"),
+    ("genero", "Ciencia ficción"),
+    ("genero", "Fantasía"),
+    ("genero", "Filosofía"),
+    ("genero", "Geología"),
+    ("encuadernacion", "Tapa dura"),
+    ("encuadernacion", "Tapa blanda"),
+    ("encuadernacion", "Sin encuadernación"),
+    ("ilustraciones", "Contiene ilustraciones"),
+    ("ilustraciones", "Ilustraciones en blanco y negro"),
+    ("ilustraciones", "Profusamente ilustrado"),
+    ("ilustraciones", "Profusamente ilustrado, en blanco y negro"),
+    ("estado_stock", "Descatalogado"),
+]
 
 
 def normalize_block(value: str | None) -> str | None:
@@ -131,18 +211,145 @@ def _iter_modules_from_structure(base: Path) -> list[tuple[str, str, Path]]:
     return modules
 
 
+def _create_books_core_schema(con: Any) -> None:
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS books (
+            id VARCHAR PRIMARY KEY,
+            estado_stock VARCHAR,
+            estado_carga VARCHAR,
+            titulo VARCHAR,
+            titulo_corto VARCHAR,
+            subtitulo VARCHAR,
+            titulo_completo VARCHAR,
+            autor VARCHAR,
+            pais_autor VARCHAR,
+            editorial VARCHAR,
+            pais_publicacion VARCHAR,
+            anio VARCHAR,
+            isbn VARCHAR,
+            idioma VARCHAR,
+            edicion VARCHAR,
+            numero_impresion VARCHAR,
+            coleccion VARCHAR,
+            numero_coleccion INTEGER,
+            obra_completa VARCHAR,
+            volumen VARCHAR,
+            traductor VARCHAR,
+            ilustrador VARCHAR,
+            editor VARCHAR,
+            fotografia_de VARCHAR,
+            introduccion_de VARCHAR,
+            epilogo_de VARCHAR,
+            categoria VARCHAR,
+            genero VARCHAR,
+            tipo_articulo VARCHAR,
+            ilustraciones VARCHAR,
+            encuadernacion VARCHAR,
+            detalle_encuadernacion VARCHAR,
+            estado_conservacion VARCHAR,
+            estado_cubierta VARCHAR,
+            desperfectos VARCHAR,
+            dedicatorias VARCHAR,
+            dimensiones VARCHAR,
+            alto SMALLINT DEFAULT 0,
+            ancho INTEGER DEFAULT 0,
+            fondo INTEGER DEFAULT 0,
+            peso INTEGER DEFAULT 0,
+            unidad_peso VARCHAR DEFAULT 'GRAMS',
+            paginas INTEGER DEFAULT 0,
+            plantilla_envio VARCHAR,
+            palabras_clave VARCHAR,
+            catalogo_1 VARCHAR,
+            catalogo_2 VARCHAR,
+            catalogo_3 VARCHAR,
+            url_imagenes VARCHAR,
+            precio DECIMAL(18, 2) DEFAULT 1.00,
+            cantidad INTEGER DEFAULT 1,
+            descripcion VARCHAR
+        )
+        """
+    )
+
+    con.execute("CREATE INDEX IF NOT EXISTS idx_books_idioma ON books(idioma)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_books_palabras_clave ON books(palabras_clave)")
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS iso_639_3 (
+            id VARCHAR,
+            part2b VARCHAR,
+            part2t VARCHAR,
+            part1 VARCHAR,
+            scope VARCHAR,
+            language_yype VARCHAR,
+            ref_name VARCHAR,
+            comment VARCHAR,
+            nombre_spa VARCHAR
+        )
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS book_field_allowed_values (
+            table_name VARCHAR,
+            field_name VARCHAR,
+            field_value VARCHAR,
+            PRIMARY KEY (table_name, field_name, field_value)
+        )
+        """
+    )
+    con.execute("DELETE FROM book_field_allowed_values WHERE table_name = 'books'")
+    con.executemany(
+        "INSERT INTO book_field_allowed_values (table_name, field_name, field_value) VALUES (?, ?, ?)",
+        [("books", field_name, field_value) for field_name, field_value in BOOK_ALLOWED_VALUES],
+    )
+
+    con.execute(
+        """
+        CREATE OR REPLACE VIEW libros_carga_abebooks AS
+        SELECT
+            b.id AS listingid,
+            b.titulo AS title,
+            b.autor AS author,
+            b.editorial AS publishername,
+            b.isbn AS isbn,
+            CASE
+                WHEN strpos(COALESCE(b.idioma, ''), ';') > 0 THEN 'MUL'
+                ELSE (
+                    SELECT upper(i.id)
+                    FROM iso_639_3 i
+                    WHERE i.nombre_spa = b.idioma
+                    LIMIT 1
+                )
+            END AS language,
+            b.tipo_articulo AS producttype,
+            b.encuadernacion AS bindingtext,
+            b.estado_conservacion AS bookcondition,
+            b.palabras_clave AS keywords,
+            b.url_imagenes AS imgurl,
+            b.precio AS price,
+            b.cantidad AS quantity,
+            b.descripcion AS description
+        FROM books b
+        WHERE b.estado_carga IN ('Para subir', 'Para actualizar')
+        """
+    )
+
+
 def init_table() -> None:
     with get_connection() as con:
+        # Operational state lives in `book_items`; core output schema is created in `books`.
         con.execute(
             """
-            CREATE TABLE IF NOT EXISTS books (
+            CREATE TABLE IF NOT EXISTS book_items (
                 id VARCHAR PRIMARY KEY,
                 block VARCHAR,
                 module VARCHAR,
                 seq VARCHAR,
 
                 image_path VARCHAR,
-                image_paths_json VARCHAR DEFAULT '[]',
                 image_count INTEGER DEFAULT 0,
 
                 credits_text VARCHAR,
@@ -179,171 +386,62 @@ def init_table() -> None:
             """
         )
 
-        con.execute("ALTER TABLE books ADD COLUMN IF NOT EXISTS ocr_provider VARCHAR")
-        con.execute("ALTER TABLE books ADD COLUMN IF NOT EXISTS ocr_model VARCHAR")
-        con.execute("ALTER TABLE books ADD COLUMN IF NOT EXISTS ocr_trace_json VARCHAR")
-
         con.execute(
             """
-            CREATE TABLE IF NOT EXISTS book_images (
+            CREATE TABLE IF NOT EXISTS book_image_files (
                 book_id VARCHAR,
-                position INTEGER,
-                image_path VARCHAR,
+                n_imagen INTEGER,
+                filename VARCHAR,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(book_id, position)
+                PRIMARY KEY(book_id, n_imagen)
             )
             """
         )
 
         con.execute(
             """
-            CREATE TABLE IF NOT EXISTS book_payload_fields (
-                book_id VARCHAR,
-                payload_type VARCHAR,
-                path VARCHAR,
-                value_type VARCHAR,
-                value_text VARCHAR,
+            CREATE TABLE IF NOT EXISTS book_ocr_data (
+                book_id VARCHAR PRIMARY KEY,
+                extracted_text VARCHAR,
+                isbn_raw VARCHAR,
+                isbn VARCHAR,
+                isbn_list VARCHAR,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(book_id, payload_type, path)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS book_bibliographic_sources (
+                book_id VARCHAR,
+                provider VARCHAR,
+                isbn VARCHAR,
+                payload_json VARCHAR,
+                provider_status VARCHAR,
+                provider_error VARCHAR,
+                fetched_at VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(book_id, provider)
+            )
+            """
+        )
 
-def _leaf_to_storage(value: Any) -> tuple[str, str | None]:
-    if value is None:
-        return "null", None
-    if isinstance(value, bool):
-        return "bool", "1" if value else "0"
-    if isinstance(value, int):
-        return "int", str(value)
-    if isinstance(value, float):
-        return "float", repr(value)
-    return "str", str(value)
-
-
-def _leaf_from_storage(value_type: str, value_text: str | None) -> Any:
-    if value_type == "null":
-        return None
-    if value_type == "bool":
-        return str(value_text or "").strip().lower() in {"1", "true", "t", "yes", "y"}
-    if value_type == "int":
-        try:
-            return int(str(value_text or "0"))
-        except ValueError:
-            return None
-    if value_type == "float":
-        try:
-            return float(str(value_text or "0"))
-        except ValueError:
-            return None
-    return str(value_text or "")
+        _create_books_core_schema(con)
 
 
-def _flatten_payload(value: Any, *, prefix: str = "") -> list[tuple[str, str, str | None]]:
-    rows: list[tuple[str, str, str | None]] = []
 
-    if isinstance(value, dict):
-        for key, item in value.items():
-            text_key = str(key)
-            path = f"{prefix}/{text_key}" if prefix else text_key
-            rows.extend(_flatten_payload(item, prefix=path))
-        return rows
-
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            path = f"{prefix}/{index}" if prefix else str(index)
-            rows.extend(_flatten_payload(item, prefix=path))
-        return rows
-
-    path = prefix or "$"
-    value_type, value_text = _leaf_to_storage(value)
-    rows.append((path, value_type, value_text))
-    return rows
-
-
-def _path_segments(path: str) -> list[str]:
-    text = str(path or "").strip()
-    if not text or text == "$":
-        return []
-    return [segment for segment in text.split("/") if segment]
-
-
-def _assign_payload_value(root: dict[str, Any] | list[Any], segments: list[str], value: Any) -> None:
-    cursor: dict[str, Any] | list[Any] = root
-
-    for index, segment in enumerate(segments):
-        last = index == len(segments) - 1
-        is_list_index = segment.isdigit()
-        next_is_list_index = (index + 1) < len(segments) and segments[index + 1].isdigit()
-
-        if is_list_index:
-            if not isinstance(cursor, list):
-                return
-
-            position = int(segment)
-            while len(cursor) <= position:
-                cursor.append(None)
-
-            if last:
-                cursor[position] = value
-                return
-
-            current = cursor[position]
-            expected_type = list if next_is_list_index else dict
-            if not isinstance(current, expected_type):
-                current = [] if next_is_list_index else {}
-                cursor[position] = current
-            cursor = current
-            continue
-
-        if not isinstance(cursor, dict):
-            return
-
-        if last:
-            cursor[segment] = value
-            return
-
-        current = cursor.get(segment)
-        expected_type = list if next_is_list_index else dict
-        if not isinstance(current, expected_type):
-            current = [] if next_is_list_index else {}
-            cursor[segment] = current
-        cursor = current
-
-
-def _rebuild_payload(rows: list[tuple[str, str, str | None]], default: Any) -> Any:
-    if not rows:
-        if isinstance(default, dict):
-            return {}
-        if isinstance(default, list):
-            return []
-        return default
-
-    first_segments = _path_segments(rows[0][0])
-    if not first_segments:
-        root: Any = _leaf_from_storage(rows[0][1], rows[0][2])
-    else:
-        root = [] if first_segments[0].isdigit() else {}
-
-    for path, value_type, value_text in rows:
-        segments = _path_segments(path)
-        value = _leaf_from_storage(value_type, value_text)
-
-        if not segments:
-            root = value
-            continue
-
-        if isinstance(root, (dict, list)):
-            _assign_payload_value(root, segments, value)
-
-    if isinstance(default, dict) and isinstance(root, dict):
-        return root
-    if isinstance(default, list) and isinstance(root, list):
-        return root
-    return root
+def _payload_column(payload_type: str) -> str:
+    if payload_type == "metadata":
+        return "metadata_json"
+    if payload_type == "catalog":
+        return "catalog_json"
+    if payload_type == "ocr_trace":
+        return "ocr_trace_json"
+    raise ValueError(f"Invalid payload_type: {payload_type}")
 
 
 def _payload_default(default: Any) -> Any:
@@ -354,18 +452,121 @@ def _payload_default(default: Any) -> Any:
     return default
 
 
-def _replace_book_images(book_id: str, image_paths: list[str]) -> None:
-    rows = [str(path).strip() for path in image_paths if str(path).strip()]
+def _image_filename(raw_path: str) -> str:
+    return Path(str(raw_path or "").strip()).name
+
+
+def _resolve_image_file_path(*, block: str | None, module: str | None, filename: str | None) -> str | None:
+    block_value = str(block or "").strip().upper()
+    try:
+        module_value = normalize_module(module)
+    except ValueError:
+        return None
+    filename_value = str(filename or "").strip()
+    if not block_value or not module_value or not filename_value:
+        return None
+    return str((DEFAULT_COVERS_DIR / block_value / module_value / filename_value).resolve())
+
+
+def _upsert_ocr_data(
+    *,
+    book_id: str,
+    credits_text: str | None,
+    isbn_raw: str | None,
+    isbn: str | None,
+    trace: dict[str, Any] | list[Any] | None,
+) -> None:
+    candidates: list[str] = []
+    if isinstance(trace, dict):
+        extraction = trace.get("isbn_extraction")
+        if isinstance(extraction, dict):
+            raw_candidates = extraction.get("candidates")
+            if isinstance(raw_candidates, list):
+                candidates = [str(item).strip() for item in raw_candidates if str(item).strip()]
+
+    if not candidates:
+        if isbn:
+            candidates = [str(isbn)]
+        elif isbn_raw:
+            candidates = [str(isbn_raw)]
+
+    isbn_list = ";".join(candidates) if candidates else None
 
     with get_connection() as con:
-        con.execute("DELETE FROM book_images WHERE book_id = ?", [book_id])
-        for position, image_path in enumerate(rows):
+        con.execute("DELETE FROM book_ocr_data WHERE book_id = ?", [book_id])
+        con.execute(
+            """
+            INSERT INTO book_ocr_data (
+                book_id,
+                extracted_text, isbn_raw, isbn, isbn_list,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            [
+                book_id,
+                credits_text,
+                isbn_raw,
+                isbn,
+                isbn_list,
+            ],
+        )
+
+
+def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any]) -> None:
+    isbn = str(metadata.get("isbn") or "").strip() or None
+    fetched_at = str(metadata.get("fetched_at") or "").strip() or None
+    errors = metadata.get("errors") if isinstance(metadata.get("errors"), dict) else {}
+
+    with get_connection() as con:
+        for source_key, provider in METADATA_PROVIDER_MAP:
+            payload = metadata.get(source_key) if isinstance(metadata.get(source_key), dict) else {}
+            provider_error = str(errors.get(source_key) or "").strip() if isinstance(errors, dict) else ""
+            provider_status = "fetched" if payload else ("error" if provider_error else "empty")
+
+            con.execute("DELETE FROM book_bibliographic_sources WHERE book_id = ? AND provider = ?", [book_id, provider])
             con.execute(
                 """
-                INSERT INTO book_images (book_id, position, image_path, created_at, updated_at)
+                INSERT INTO book_bibliographic_sources (
+                    book_id, provider,
+                    isbn, payload_json, provider_status, provider_error, fetched_at,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                [
+                    book_id,
+                    provider,
+                    isbn,
+                    json.dumps(payload, ensure_ascii=False),
+                    provider_status,
+                    provider_error or None,
+                    fetched_at,
+                ],
+            )
+
+
+def _clear_bibliographic_sources(book_id: str) -> None:
+    with get_connection() as con:
+        con.execute("DELETE FROM book_bibliographic_sources WHERE book_id = ?", [book_id])
+
+
+def _replace_book_images(book_id: str, image_paths: list[str]) -> None:
+    rows = [_image_filename(str(path)) for path in image_paths if str(path).strip()]
+    rows = [row for row in rows if row]
+
+    with get_connection() as con:
+        con.execute("DELETE FROM book_image_files WHERE book_id = ?", [book_id])
+        for position, filename in enumerate(rows, start=1):
+            con.execute(
+                """
+                INSERT INTO book_image_files (
+                    book_id, n_imagen, filename,
+                    created_at, updated_at
+                )
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                [book_id, int(position), image_path],
+                [book_id, int(position), filename],
             )
 
 
@@ -373,10 +574,11 @@ def _clear_payload(book_id: str, payload_type: str) -> None:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
+    column = _payload_column(payload_type)
     with get_connection() as con:
         con.execute(
-            "DELETE FROM book_payload_fields WHERE book_id = ? AND payload_type = ?",
-            [book_id, payload_type],
+            f"UPDATE book_items SET {column} = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [book_id],
         )
 
 
@@ -384,39 +586,37 @@ def _replace_payload(book_id: str, payload_type: str, payload: Any) -> None:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
-    rows = _flatten_payload(payload if payload is not None else {})
-
+    column = _payload_column(payload_type)
+    serialized = json.dumps(payload if payload is not None else {}, ensure_ascii=False)
     with get_connection() as con:
         con.execute(
-            "DELETE FROM book_payload_fields WHERE book_id = ? AND payload_type = ?",
-            [book_id, payload_type],
+            f"UPDATE book_items SET {column} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [serialized, book_id],
         )
-
-        for path, value_type, value_text in rows:
-            con.execute(
-                """
-                INSERT INTO book_payload_fields (
-                    book_id, payload_type, path, value_type, value_text,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                [book_id, payload_type, path, value_type, value_text],
-            )
 
 
 def _load_book_images(book_id: str, *, fallback: list[str] | None = None) -> list[str]:
+    parts = split_book_id(book_id)
+    module_value = parts[0] if parts else None
+    block_value = parts[1] if parts else None
+
     with get_connection() as con:
         cur = con.execute(
             """
-            SELECT image_path
-            FROM book_images
+            SELECT filename
+            FROM book_image_files
             WHERE book_id = ?
-            ORDER BY position
+            ORDER BY n_imagen
             """,
             [book_id],
         )
-        rows = [str(row[0]) for row in cur.fetchall() if str(row[0]).strip()]
+
+        rows: list[str] = []
+        for row in cur.fetchall():
+            filename = str(row[0] or "").strip()
+            resolved = _resolve_image_file_path(block=block_value, module=module_value, filename=filename)
+            if resolved:
+                rows.append(resolved)
 
     if rows:
         return rows
@@ -431,22 +631,17 @@ def _load_payload(book_id: str, payload_type: str, *, default: Any) -> Any:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
+    column = _payload_column(payload_type)
     with get_connection() as con:
         cur = con.execute(
-            """
-            SELECT path, value_type, value_text
-            FROM book_payload_fields
-            WHERE book_id = ? AND payload_type = ?
-            ORDER BY path
-            """,
-            [book_id, payload_type],
+            f"SELECT {column} FROM book_items WHERE id = ?",
+            [book_id],
         )
-        rows = [(str(row[0]), str(row[1]), row[2]) for row in cur.fetchall()]
+        row = cur.fetchone()
 
-    if not rows:
+    if not row:
         return _payload_default(default)
-
-    return _rebuild_payload(rows, default)
+    return _load_json(row[0], _payload_default(default))
 
 
 def _fetch_image_map(book_ids: list[str]) -> dict[str, list[str]]:
@@ -455,10 +650,10 @@ def _fetch_image_map(book_ids: list[str]) -> dict[str, list[str]]:
 
     placeholders = ", ".join(["?"] * len(book_ids))
     query = (
-        "SELECT book_id, image_path "
-        "FROM book_images "
+        "SELECT book_id, filename "
+        "FROM book_image_files "
         f"WHERE book_id IN ({placeholders}) "
-        "ORDER BY book_id, position"
+        "ORDER BY book_id, n_imagen"
     )
 
     grouped: dict[str, list[str]] = {}
@@ -467,7 +662,11 @@ def _fetch_image_map(book_ids: list[str]) -> dict[str, list[str]]:
 
     for row in rows:
         book_id = str(row[0])
-        image_path = str(row[1]).strip()
+        parts = split_book_id(book_id)
+        module_value = parts[0] if parts else None
+        block_value = parts[1] if parts else None
+        filename = str(row[1] or "").strip()
+        image_path = _resolve_image_file_path(block=block_value, module=module_value, filename=filename)
         if not image_path:
             continue
         grouped.setdefault(book_id, []).append(image_path)
@@ -482,26 +681,24 @@ def _fetch_payload_map(book_ids: list[str], payload_type: str, *, default: Any) 
     if not book_ids:
         return {}
 
+    column = _payload_column(payload_type)
     placeholders = ", ".join(["?"] * len(book_ids))
     query = (
-        "SELECT book_id, path, value_type, value_text "
-        "FROM book_payload_fields "
-        f"WHERE payload_type = ? AND book_id IN ({placeholders}) "
-        "ORDER BY book_id, path"
+        f"SELECT id, {column} "
+        "FROM book_items "
+        f"WHERE id IN ({placeholders}) "
+        "ORDER BY id"
     )
-    params: list[Any] = [payload_type, *book_ids]
-
-    grouped_rows: dict[str, list[tuple[str, str, str | None]]] = {}
+    params: list[Any] = [*book_ids]
+    payload_map: dict[str, Any] = {}
     with get_connection() as con:
         rows = con.execute(query, params).fetchall()
 
     for row in rows:
-        book_id = str(row[0])
-        grouped_rows.setdefault(book_id, []).append((str(row[1]), str(row[2]), row[3]))
-
-    payload_map: dict[str, Any] = {}
-    for book_id, payload_rows in grouped_rows.items():
-        payload_map[book_id] = _rebuild_payload(payload_rows, default)
+        book_id = str(row[0] or "").strip()
+        if not book_id:
+            continue
+        payload_map[book_id] = _load_json(row[1], _payload_default(default))
 
     return payload_map
 
@@ -518,18 +715,15 @@ def _row_to_dict(
     payload = dict(zip(columns, row))
     book_id = str(payload.get("id") or "").strip()
 
-    legacy_images = _load_json(payload.get("image_paths_json"), [])
-
     if image_map is not None and book_id in image_map:
         image_paths = image_map.get(book_id, [])
     else:
-        image_paths = _load_book_images(book_id, fallback=legacy_images) if book_id else legacy_images
+        image_paths = _load_book_images(book_id, fallback=[]) if book_id else []
 
     payload["image_paths"] = image_paths
     if image_paths:
         payload["image_count"] = len(image_paths)
-        if not str(payload.get("image_path") or "").strip():
-            payload["image_path"] = image_paths[0]
+        payload["image_path"] = image_paths[0]
 
     if metadata_map is not None:
         payload["metadata"] = metadata_map.get(book_id, {})
@@ -555,7 +749,7 @@ def get_book(book_id: str) -> dict[str, Any] | None:
         return None
 
     with get_connection() as con:
-        cur = con.execute("SELECT * FROM books WHERE id = ?", [normalized])
+        cur = con.execute("SELECT * FROM book_items WHERE id = ?", [normalized])
         row = cur.fetchone()
         if not row:
             return None
@@ -573,7 +767,7 @@ def list_books(
 ) -> list[dict[str, Any]]:
     scope_block, scope_module = resolve_scope(block, module, require=False)
 
-    sql = "SELECT * FROM books"
+    sql = "SELECT * FROM book_items"
     where: list[str] = []
     params: list[Any] = []
 
@@ -663,7 +857,7 @@ def refresh_pipeline_stage(book_id: str) -> None:
     stage = _derive_pipeline_stage_from_dict(book)
     with get_connection() as con:
         con.execute(
-            "UPDATE books SET pipeline_stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE book_items SET pipeline_stage = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             [stage, book_id],
         )
 
@@ -683,7 +877,7 @@ def _update_book(book_id: str, fields: dict[str, Any]) -> None:
 
     with get_connection() as con:
         con.execute(
-            f"UPDATE books SET {', '.join(assignments)} WHERE id = ?",
+            f"UPDATE book_items SET {', '.join(assignments)} WHERE id = ?",
             params,
         )
 
@@ -774,7 +968,7 @@ def increment_workflow_attempt(book_id: str) -> int:
     with get_connection() as con:
         cur = con.execute(
             """
-            UPDATE books
+            UPDATE book_items
             SET workflow_attempt = COALESCE(workflow_attempt, 0) + 1,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -824,6 +1018,7 @@ def reset_from_stage(book_id: str, stage: str) -> None:
         _clear_payload(book_id, "ocr_trace")
         _clear_payload(book_id, "metadata")
         _clear_payload(book_id, "catalog")
+        _clear_bibliographic_sources(book_id)
     elif normalized_stage == "metadata":
         fields.update(
             {
@@ -838,6 +1033,7 @@ def reset_from_stage(book_id: str, stage: str) -> None:
         )
         _clear_payload(book_id, "metadata")
         _clear_payload(book_id, "catalog")
+        _clear_bibliographic_sources(book_id)
     elif normalized_stage == "catalog":
         fields.update(
             {
@@ -859,6 +1055,14 @@ def reset_from_stage(book_id: str, stage: str) -> None:
         )
 
     _update_book(book_id, fields)
+    if normalized_stage == "ocr":
+        _upsert_ocr_data(
+            book_id=book_id,
+            credits_text=None,
+            isbn_raw=None,
+            isbn=None,
+            trace=None,
+        )
     refresh_pipeline_stage(book_id)
 
 
@@ -866,7 +1070,7 @@ def recover_stale_running_workflows(*, reason: str = "Recovered after backend re
     with get_connection() as con:
         cur = con.execute(
             """
-            UPDATE books
+            UPDATE book_items
             SET workflow_status = 'pending',
                 workflow_current_node = 'recovered',
                 workflow_review_reason = ?,
@@ -957,7 +1161,7 @@ def ingest_covers(
 
     for book_id, image_paths in grouped.items():
         image_paths = sorted(set(image_paths))
-        primary_image = image_paths[0] if image_paths else None
+        primary_image = _image_filename(image_paths[0]) if image_paths else None
         parts = split_book_id(book_id)
         block_value = parts[1] if parts else None
         module_value = parts[0] if parts else None
@@ -968,7 +1172,7 @@ def ingest_covers(
             with get_connection() as con:
                 con.execute(
                     """
-                    INSERT INTO books (
+                    INSERT INTO book_items (
                         id, block, module, seq,
                         image_path, image_count,
                         pipeline_stage, workflow_status, workflow_attempt,
@@ -987,6 +1191,13 @@ def ingest_covers(
                 )
 
             _replace_book_images(book_id, image_paths)
+            _upsert_ocr_data(
+                book_id=book_id,
+                credits_text=None,
+                isbn_raw=None,
+                isbn=None,
+                trace=None,
+            )
             inserted += 1
             continue
 
@@ -1004,7 +1215,7 @@ def ingest_covers(
             "seq": seq,
         }
         if merged_paths:
-            fields["image_path"] = merged_paths[0]
+            fields["image_path"] = _image_filename(merged_paths[0])
 
         _update_book(book_id, fields)
         _replace_book_images(book_id, merged_paths)
@@ -1075,6 +1286,13 @@ def update_ocr(
         },
     )
     _replace_payload(book_id, "ocr_trace", trace if trace is not None else {})
+    _upsert_ocr_data(
+        book_id=book_id,
+        credits_text=credits_text,
+        isbn_raw=isbn_raw,
+        isbn=isbn,
+        trace=trace,
+    )
     refresh_pipeline_stage(book_id)
 
 
@@ -1087,6 +1305,7 @@ def update_metadata(book_id: str, *, metadata: dict[str, Any], status: str, erro
         },
     )
     _replace_payload(book_id, "metadata", metadata)
+    _upsert_bibliographic_sources(book_id=book_id, metadata=metadata)
     refresh_pipeline_stage(book_id)
 
 
@@ -1148,7 +1367,7 @@ def books_for_stage(
         elif normalized_stage == "cover":
             where.append("COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')")
 
-    sql = "SELECT id FROM books"
+    sql = "SELECT id FROM book_items"
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY id LIMIT ?"
@@ -1199,12 +1418,12 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         scope_params.append(scope_module)
 
     with get_connection() as con:
-        total = int(con.execute(_append_scope_where("SELECT COUNT(*) FROM books", scope_where), scope_params).fetchone()[0])
+        total = int(con.execute(_append_scope_where("SELECT COUNT(*) FROM book_items", scope_where), scope_params).fetchone()[0])
 
         needs_ocr = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM books WHERE COALESCE(ocr_status, '') NOT IN ('processed', 'manual', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(ocr_status, '') NOT IN ('processed', 'manual', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -1214,7 +1433,7 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_metadata = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM books WHERE COALESCE(metadata_status, '') NOT IN ('fetched', 'partial', 'manual', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(metadata_status, '') NOT IN ('fetched', 'partial', 'manual', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -1224,7 +1443,7 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_catalog = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM books WHERE COALESCE(catalog_status, '') NOT IN ('built', 'partial', 'manual')",
+                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(catalog_status, '') NOT IN ('built', 'partial', 'manual')",
                     scope_where,
                 ),
                 scope_params,
@@ -1234,7 +1453,7 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_cover = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM books WHERE COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -1243,7 +1462,7 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
 
         needs_review = int(
             con.execute(
-                _append_scope_where("SELECT COUNT(*) FROM books WHERE workflow_needs_review = TRUE", scope_where),
+                _append_scope_where("SELECT COUNT(*) FROM book_items WHERE workflow_needs_review = TRUE", scope_where),
                 scope_params,
             ).fetchone()[0]
         )

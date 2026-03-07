@@ -297,6 +297,59 @@ def _ocr_with_model(model: str, image_paths: list[Path]) -> tuple[str, list[dict
     return "\n".join(chunks).strip(), traces
 
 
+def _compact_ocr_attempts(traces: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(traces)
+    ok = 0
+    invalid = 0
+    error = 0
+    first_error: str | None = None
+
+    for attempt in traces:
+        status = str(attempt.get("status") or "").strip().lower()
+        if status == "ok":
+            ok += 1
+        elif status == "invalid":
+            invalid += 1
+        elif status == "error":
+            error += 1
+
+        if first_error is None:
+            detail = str(attempt.get("error") or "").strip()
+            if detail:
+                first_error = detail[:320]
+
+    return {
+        "total": total,
+        "ok": ok,
+        "invalid": invalid,
+        "error": error,
+        "first_error": first_error,
+    }
+
+
+def _compact_isbn_extraction(
+    *,
+    provider: str,
+    model: str,
+    isbn_data: dict[str, Any],
+    isbn_error: str | None,
+) -> dict[str, Any]:
+    candidates = isbn_data.get("isbns") if isinstance(isbn_data.get("isbns"), list) else []
+    compact_candidates = [str(item) for item in candidates[:5] if str(item).strip()]
+
+    return {
+        "provider": provider,
+        "model": model,
+        "source": str(isbn_data.get("source") or "").strip() or None,
+        "isbn_raw": isbn_data.get("isbn_raw"),
+        "isbn": isbn_data.get("isbn"),
+        "is_valid": bool(isbn_data.get("isbn")),
+        "candidates": compact_candidates,
+        "candidates_count": len(candidates),
+        "error": str(isbn_error or "").strip() or None,
+    }
+
+
 def derive_isbn_from_text(credits_text: str | None) -> dict[str, Any]:
     text = str(credits_text or "")
 
@@ -392,12 +445,13 @@ def run_one(
                 message = f"{message}: {detail[:320]}"
                 break
 
+        compact_attempts = _compact_ocr_attempts(traces)
         trace_payload = {
             "source": "provider",
             "provider_requested": requested_provider,
             "provider": "ollama",
             "model": selected_model,
-            "ocr_attempts": traces,
+            "ocr_attempts": compact_attempts,
         }
 
         books.update_ocr(
@@ -435,19 +489,20 @@ def run_one(
     isbn_raw_value = isbn_data.get("isbn_raw")
     isbn_value = isbn_data.get("isbn")
 
+    compact_attempts = _compact_ocr_attempts(traces)
+    compact_isbn = _compact_isbn_extraction(
+        provider="ollama",
+        model=selected_isbn_model,
+        isbn_data=isbn_data,
+        isbn_error=isbn_error,
+    )
     trace_payload = {
         "source": "provider",
         "provider_requested": requested_provider,
         "provider": "ollama",
         "model": selected_model,
-        "ocr_attempts": traces,
-        "isbn_extraction": {
-            "provider": "ollama",
-            "model": selected_isbn_model,
-            "prompt": ISBN_PROMPT,
-            "result": isbn_data,
-            "error": isbn_error,
-        },
+        "ocr_attempts": compact_attempts,
+        "isbn_extraction": compact_isbn,
     }
 
     books.update_ocr(

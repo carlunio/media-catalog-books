@@ -70,9 +70,17 @@ def _invalid_ocr_isbn_reason(book: dict[str, Any]) -> str:
     reason = "ocr_isbn_validation: OCR text extracted but no valid ISBN was found"
     trace = book.get("ocr_trace") if isinstance(book.get("ocr_trace"), dict) else {}
     extraction = trace.get("isbn_extraction") if isinstance(trace.get("isbn_extraction"), dict) else {}
-    result = extraction.get("result") if isinstance(extraction.get("result"), dict) else {}
 
-    candidates = result.get("isbns") if isinstance(result.get("isbns"), list) else []
+    candidates: list[str] = []
+    raw_candidates = extraction.get("candidates")
+    if isinstance(raw_candidates, list):
+        candidates = [str(item) for item in raw_candidates if str(item).strip()]
+    else:
+        legacy_result = extraction.get("result") if isinstance(extraction.get("result"), dict) else {}
+        legacy_candidates = legacy_result.get("isbns")
+        if isinstance(legacy_candidates, list):
+            candidates = [str(item) for item in legacy_candidates if str(item).strip()]
+
     isbn_raw = str(book.get("isbn_raw") or "").strip()
 
     tail_parts: list[str] = []
