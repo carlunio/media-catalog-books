@@ -220,6 +220,67 @@ def _resolve_covers_dir(covers_dir: str | Path) -> Path:
     return path
 
 
+def _chunked(items: list[Any], size: int = 400) -> list[list[Any]]:
+    if size < 1:
+        size = 1
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _bulk_insert_book_items(
+    con: Any,
+    rows: list[tuple[str, str | None, str | None, str | None]],
+    *,
+    chunk_size: int = 300,
+) -> None:
+    if not rows:
+        return
+
+    values_template = "(?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    for chunk in _chunked(rows, size=chunk_size):
+        flat_params: list[Any] = []
+        for row in chunk:
+            flat_params.extend(row)
+        values_clause = ", ".join([values_template] * len(chunk))
+        con.execute(
+            f"""
+            INSERT INTO book_items (
+                id, block, module, seq,
+                pipeline_stage, workflow_status, workflow_attempt,
+                created_at, updated_at
+            )
+            VALUES {values_clause}
+            """,
+            flat_params,
+        )
+
+
+def _bulk_insert_book_image_files(
+    con: Any,
+    rows: list[tuple[str, int, str]],
+    *,
+    chunk_size: int = 500,
+) -> None:
+    if not rows:
+        return
+
+    values_template = "(?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    for chunk in _chunked(rows, size=chunk_size):
+        flat_params: list[Any] = []
+        for row in chunk:
+            flat_params.extend(row)
+        values_clause = ", ".join([values_template] * len(chunk))
+        con.execute(
+            f"""
+            INSERT INTO book_image_files (
+                book_id, n_imagen, filename,
+                created_at, updated_at
+            )
+            VALUES {values_clause}
+            """,
+            flat_params,
+        )
+
+
 def _iter_modules_from_structure(base: Path) -> list[tuple[str, str, Path]]:
     missing_blocks: list[str] = []
     invalid_entries: list[str] = []
@@ -567,6 +628,7 @@ def _upsert_ocr_data(
     isbn_raw: str | None,
     isbn: str | None,
     trace: dict[str, Any] | list[Any] | None,
+    con: Any | None = None,
 ) -> None:
     candidates: list[str] = []
     if isinstance(trace, dict):
@@ -584,7 +646,12 @@ def _upsert_ocr_data(
 
     isbn_list = ";".join(candidates) if candidates else None
 
-    with get_connection() as con:
+    owns_connection = con is None
+    if owns_connection:
+        con = get_connection()
+
+    assert con is not None
+    try:
         con.execute("DELETE FROM book_ocr_data WHERE book_id = ?", [book_id])
         con.execute(
             """
@@ -603,14 +670,22 @@ def _upsert_ocr_data(
                 isbn_list,
             ],
         )
+    finally:
+        if owns_connection:
+            con.close()
 
 
-def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any]) -> None:
+def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any], con: Any | None = None) -> None:
     isbn = str(metadata.get("isbn") or "").strip() or None
     fetched_at = str(metadata.get("fetched_at") or "").strip() or None
     errors = metadata.get("errors") if isinstance(metadata.get("errors"), dict) else {}
 
-    with get_connection() as con:
+    owns_connection = con is None
+    if owns_connection:
+        con = get_connection()
+
+    assert con is not None
+    try:
         for source_key, provider in METADATA_PROVIDER_MAP:
             payload = metadata.get(source_key) if isinstance(metadata.get(source_key), dict) else {}
             provider_error = str(errors.get(source_key) or "").strip() if isinstance(errors, dict) else ""
@@ -636,6 +711,9 @@ def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any]) -> 
                     fetched_at,
                 ],
             )
+    finally:
+        if owns_connection:
+            con.close()
 
 
 def _empty_metadata(book_id: str, isbn: str | None = None) -> dict[str, Any]:
@@ -807,29 +885,43 @@ def _replace_book_images(book_id: str, image_paths: list[str]) -> None:
             )
 
 
-def _clear_payload(book_id: str, payload_type: str) -> None:
+def _clear_payload(book_id: str, payload_type: str, *, con: Any | None = None) -> None:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
     column = _payload_column(payload_type)
-    with get_connection() as con:
-        con.execute(
-            f"UPDATE book_items SET {column} = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [book_id],
-        )
+    if con is None:
+        with get_connection() as local_con:
+            local_con.execute(
+                f"UPDATE book_items SET {column} = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                [book_id],
+            )
+        return
+
+    con.execute(
+        f"UPDATE book_items SET {column} = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [book_id],
+    )
 
 
-def _replace_payload(book_id: str, payload_type: str, payload: Any) -> None:
+def _replace_payload(book_id: str, payload_type: str, payload: Any, *, con: Any | None = None) -> None:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
     column = _payload_column(payload_type)
     serialized = json.dumps(payload if payload is not None else {}, ensure_ascii=False)
-    with get_connection() as con:
-        con.execute(
-            f"UPDATE book_items SET {column} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            [serialized, book_id],
-        )
+    if con is None:
+        with get_connection() as local_con:
+            local_con.execute(
+                f"UPDATE book_items SET {column} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                [serialized, book_id],
+            )
+        return
+
+    con.execute(
+        f"UPDATE book_items SET {column} = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [serialized, book_id],
+    )
 
 
 def _load_book_images(book_id: str, *, fallback: list[str] | None = None) -> list[str]:
@@ -1110,7 +1202,7 @@ def refresh_pipeline_stage(book_id: str) -> None:
         )
 
 
-def _update_book(book_id: str, fields: dict[str, Any]) -> None:
+def _update_book(book_id: str, fields: dict[str, Any], *, con: Any | None = None) -> None:
     if not fields:
         return
 
@@ -1123,11 +1215,18 @@ def _update_book(book_id: str, fields: dict[str, Any]) -> None:
     assignments.append("updated_at = CURRENT_TIMESTAMP")
     params.append(book_id)
 
-    with get_connection() as con:
-        con.execute(
-            f"UPDATE book_items SET {', '.join(assignments)} WHERE id = ?",
-            params,
-        )
+    if con is None:
+        with get_connection() as local_con:
+            local_con.execute(
+                f"UPDATE book_items SET {', '.join(assignments)} WHERE id = ?",
+                params,
+            )
+        return
+
+    con.execute(
+        f"UPDATE book_items SET {', '.join(assignments)} WHERE id = ?",
+        params,
+    )
 
 
 def set_workflow_running(book_id: str, *, node: str, action: str | None = None) -> None:
@@ -1394,57 +1493,118 @@ def ingest_covers(
 
     inserted = 0
     updated = 0
-
+    grouped_filenames: dict[str, list[str]] = {}
     for book_id, image_paths in grouped.items():
-        image_paths = sorted(set(image_paths))
+        filenames = sorted(
+            {
+                _image_filename(path)
+                for path in image_paths
+                if str(path).strip() and _image_filename(path)
+            }
+        )
+        if filenames:
+            grouped_filenames[book_id] = filenames
+
+    grouped = grouped_filenames
+    grouped_ids = sorted(grouped.keys())
+
+    existing_items: dict[str, tuple[str | None, str | None, str | None]] = {}
+    existing_images: dict[str, list[str]] = {}
+
+    if grouped_ids:
+        with get_connection() as con:
+            for ids_chunk in _chunked(grouped_ids):
+                placeholders = ", ".join(["?"] * len(ids_chunk))
+                for row in con.execute(
+                    f"SELECT id, block, module, seq FROM book_items WHERE id IN ({placeholders})",
+                    ids_chunk,
+                ).fetchall():
+                    item_id = str(row[0] or "").strip()
+                    if not item_id:
+                        continue
+                    existing_items[item_id] = (
+                        str(row[1]).strip() if row[1] is not None else None,
+                        str(row[2]).strip() if row[2] is not None else None,
+                        str(row[3]).strip() if row[3] is not None else None,
+                    )
+
+                for row in con.execute(
+                    f"""
+                    SELECT book_id, filename
+                    FROM book_image_files
+                    WHERE book_id IN ({placeholders})
+                    ORDER BY book_id, n_imagen
+                    """,
+                    ids_chunk,
+                ).fetchall():
+                    item_id = str(row[0] or "").strip()
+                    filename = str(row[1] or "").strip()
+                    if not item_id or not filename:
+                        continue
+                    existing_images.setdefault(item_id, []).append(filename)
+
+    insert_rows: list[tuple[str, str | None, str | None, str | None]] = []
+    update_rows: list[tuple[str | None, str | None, str | None, str]] = []
+    replace_image_for_books: list[str] = []
+    image_insert_rows: list[tuple[str, int, str]] = []
+    reset_candidates: list[str] = []
+
+    for book_id, filenames in grouped.items():
         parts = split_book_id(book_id)
         block_value = parts[1] if parts else None
         module_value = parts[0] if parts else None
         seq = parts[2] if parts else None
 
-        current = get_book(book_id)
-        if current is None:
-            with get_connection() as con:
-                con.execute(
-                    """
-                    INSERT INTO book_items (
-                        id, block, module, seq,
-                        pipeline_stage, workflow_status, workflow_attempt,
-                        created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """,
-                    [
-                        book_id,
-                        block_value,
-                        module_value,
-                        seq,
-                    ],
-                )
-
-            _replace_book_images(book_id, image_paths)
+        current_item = existing_items.get(book_id)
+        if current_item is None:
+            insert_rows.append((book_id, block_value, module_value, seq))
+            replace_image_for_books.append(book_id)
             inserted += 1
+            for position, filename in enumerate(filenames, start=1):
+                image_insert_rows.append((book_id, int(position), filename))
             continue
 
-        previous_paths = [str(path) for path in current.get("image_paths", []) if str(path).strip()]
+        current_block, current_module, current_seq = current_item
+        if (current_block != block_value) or (current_module != module_value) or (current_seq != seq):
+            update_rows.append((block_value, module_value, seq, book_id))
+
+        previous_filenames = [str(name).strip() for name in existing_images.get(book_id, []) if str(name).strip()]
         if overwrite_existing_paths:
-            merged_paths = image_paths
+            merged_filenames = filenames
         else:
-            merged_paths = sorted(set(previous_paths) | set(image_paths))
+            merged_filenames = sorted(set(previous_filenames) | set(filenames))
 
-        changed = merged_paths != previous_paths
-        fields = {
-            "block": block_value,
-            "module": module_value,
-            "seq": seq,
-        }
-
-        _update_book(book_id, fields)
-        _replace_book_images(book_id, merged_paths)
-
-        if changed:
-            reset_from_stage(book_id, "ocr")
+        if merged_filenames != previous_filenames:
+            replace_image_for_books.append(book_id)
+            reset_candidates.append(book_id)
             updated += 1
+            for position, filename in enumerate(merged_filenames, start=1):
+                image_insert_rows.append((book_id, int(position), filename))
+
+    if insert_rows or update_rows or replace_image_for_books:
+        with get_connection() as con:
+            if insert_rows:
+                _bulk_insert_book_items(con, insert_rows)
+
+            if update_rows:
+                con.executemany(
+                    """
+                    UPDATE book_items
+                    SET block = ?, module = ?, seq = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    update_rows,
+                )
+
+            unique_replace_ids = sorted(set(replace_image_for_books))
+            if unique_replace_ids:
+                for ids_chunk in _chunked(unique_replace_ids):
+                    placeholders = ", ".join(["?"] * len(ids_chunk))
+                    con.execute(f"DELETE FROM book_image_files WHERE book_id IN ({placeholders})", ids_chunk)
+                _bulk_insert_book_image_files(con, image_insert_rows)
+
+    for book_id in sorted(set(reset_candidates)):
+        reset_from_stage(book_id, "ocr")
 
     return {
         "folder": str(base),
@@ -1495,47 +1655,54 @@ def update_ocr(
     trace: dict[str, Any] | list[Any] | None = None,
     error: str | None = None,
 ) -> None:
-    _update_book(
-        book_id,
-        {
-            "ocr_status": status,
-            "ocr_error": error,
-            "ocr_provider": provider,
-            "ocr_model": model,
-        },
-    )
-    _replace_payload(book_id, "ocr_trace", trace if trace is not None else {})
-    _upsert_ocr_data(
-        book_id=book_id,
-        credits_text=credits_text,
-        isbn_raw=isbn_raw,
-        isbn=isbn,
-        trace=trace,
-    )
+    with get_connection() as con:
+        _update_book(
+            book_id,
+            {
+                "ocr_status": status,
+                "ocr_error": error,
+                "ocr_provider": provider,
+                "ocr_model": model,
+            },
+            con=con,
+        )
+        _replace_payload(book_id, "ocr_trace", trace if trace is not None else {}, con=con)
+        _upsert_ocr_data(
+            book_id=book_id,
+            credits_text=credits_text,
+            isbn_raw=isbn_raw,
+            isbn=isbn,
+            trace=trace,
+            con=con,
+        )
     refresh_pipeline_stage(book_id)
 
 
 def update_metadata(book_id: str, *, metadata: dict[str, Any], status: str, error: str | None = None) -> None:
-    _update_book(
-        book_id,
-        {
-            "metadata_status": status,
-            "metadata_error": error,
-        },
-    )
-    _upsert_bibliographic_sources(book_id=book_id, metadata=metadata)
+    with get_connection() as con:
+        _update_book(
+            book_id,
+            {
+                "metadata_status": status,
+                "metadata_error": error,
+            },
+            con=con,
+        )
+        _upsert_bibliographic_sources(book_id=book_id, metadata=metadata, con=con)
     refresh_pipeline_stage(book_id)
 
 
 def update_catalog(book_id: str, *, catalog: dict[str, Any], status: str, error: str | None = None) -> None:
-    _update_book(
-        book_id,
-        {
-            "catalog_status": status,
-            "catalog_error": error,
-        },
-    )
-    _replace_payload(book_id, "catalog", catalog)
+    with get_connection() as con:
+        _update_book(
+            book_id,
+            {
+                "catalog_status": status,
+                "catalog_error": error,
+            },
+            con=con,
+        )
+        _replace_payload(book_id, "catalog", catalog, con=con)
     if status in {"built", "partial", "manual"} and isinstance(catalog, dict):
         sync_core_book_from_catalog(book_id)
     refresh_pipeline_stage(book_id)

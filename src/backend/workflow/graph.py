@@ -56,6 +56,15 @@ def _stage_enabled(state: WorkflowState, stage: StageName) -> bool:
     return STAGE_ORDER[stage] >= start_idx
 
 
+def _resume_stage_from_pipeline_stage(value: Any) -> StageName | None:
+    stage = str(value or "").strip().lower()
+    if stage.startswith("running:"):
+        stage = stage.split(":", maxsplit=1)[1].strip()
+    if stage in STAGE_ORDER:
+        return stage  # type: ignore[return-value]
+    return None
+
+
 def _should_stop_after(state: WorkflowState, stage: StageName) -> bool:
     return state.get("stop_after") == stage
 
@@ -141,10 +150,26 @@ def _apply_action_node(state: WorkflowState) -> WorkflowState:
 
     if action == "approve":
         books.clear_workflow_review(book_id)
-        books.set_workflow_done(book_id, node="review_approved")
+        refreshed = books.get_book(book_id)
+        if refreshed is None:
+            return _with_failure(book_id, step="apply_action", error=f"Book not found after approve: {book_id}")
+
+        resume_stage = _resume_stage_from_pipeline_stage(refreshed.get("pipeline_stage"))
+        if resume_stage is None:
+            books.set_workflow_done(book_id, node="review_approved")
+            return {
+                "book": refreshed,
+                "stop_pipeline": True,
+                "outcome": "approved",
+            }
+
         return {
-            "stop_pipeline": True,
-            "outcome": "approved",
+            "book": refreshed,
+            "start_stage": resume_stage,
+            "action": None,
+            "failed_step": None,
+            "error": None,
+            "stop_pipeline": False,
         }
 
     retry_action_to_stage: dict[str, StageName] = {
