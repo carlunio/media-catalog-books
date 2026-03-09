@@ -159,6 +159,8 @@ def run_one(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    catalog_provider: str | None = None,
+    catalog_model: str | None = None,
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
@@ -176,6 +178,8 @@ def run_one(
             "max_attempts": int(max_attempts),
             "ocr_provider": ocr_provider,
             "ocr_model": ocr_model,
+            "catalog_provider": catalog_provider,
+            "catalog_model": catalog_model,
             "stop_pipeline": False,
         }
     )
@@ -233,6 +237,8 @@ def run_batch(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    catalog_provider: str | None = None,
+    catalog_model: str | None = None,
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
@@ -279,6 +285,8 @@ def run_batch(
                 max_attempts=max_attempts,
                 ocr_provider=ocr_provider,
                 ocr_model=ocr_model,
+                catalog_provider=catalog_provider,
+                catalog_model=catalog_model,
             )
         )
 
@@ -297,6 +305,8 @@ def review_action(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    catalog_provider: str | None = None,
+    catalog_model: str | None = None,
 ) -> dict[str, Any]:
     action_to_stage = {
         "approve": "cover",
@@ -320,6 +330,8 @@ def review_action(
         max_attempts=max_attempts,
         ocr_provider=ocr_provider,
         ocr_model=ocr_model,
+        catalog_provider=catalog_provider,
+        catalog_model=catalog_model,
     )
 
 

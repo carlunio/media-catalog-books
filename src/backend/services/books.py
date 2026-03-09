@@ -1,5 +1,6 @@
 import json
 import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ from ..database import get_connection
 from ..normalizers import extract_book_id_from_path, normalize_book_id, split_book_id
 
 STAGES = ("ocr", "metadata", "catalog", "cover")
-PAYLOAD_TYPES = {"metadata", "catalog", "ocr_trace"}
+PAYLOAD_TYPES = {"catalog", "ocr_trace"}
 VALID_BLOCKS = ("A", "B", "C")
 MODULE_DIR_PATTERN = re.compile(r"^\d{2}$")
 METADATA_PROVIDER_MAP = (
@@ -16,6 +17,7 @@ METADATA_PROVIDER_MAP = (
     ("isbndb", "isbndb"),
     ("open_library", "openlibrary"),
 )
+METADATA_PROVIDER_REVERSE_MAP = {provider: source for source, provider in METADATA_PROVIDER_MAP}
 BOOK_ALLOWED_VALUES: list[tuple[str, str]] = [
     ("edicion", "1ª edición"),
     ("edicion", "2ª edición"),
@@ -90,6 +92,63 @@ BOOK_ALLOWED_VALUES: list[tuple[str, str]] = [
     ("ilustraciones", "Profusamente ilustrado, en blanco y negro"),
     ("estado_stock", "Descatalogado"),
 ]
+CORE_BOOKS_COLUMNS: tuple[str, ...] = (
+    "id",
+    "estado_stock",
+    "estado_carga",
+    "titulo",
+    "titulo_corto",
+    "subtitulo",
+    "titulo_completo",
+    "autor",
+    "pais_autor",
+    "editorial",
+    "pais_publicacion",
+    "anio",
+    "isbn",
+    "idioma",
+    "edicion",
+    "numero_impresion",
+    "coleccion",
+    "numero_coleccion",
+    "obra_completa",
+    "volumen",
+    "traductor",
+    "ilustrador",
+    "editor",
+    "fotografia_de",
+    "introduccion_de",
+    "epilogo_de",
+    "categoria",
+    "genero",
+    "tipo_articulo",
+    "ilustraciones",
+    "encuadernacion",
+    "detalle_encuadernacion",
+    "estado_conservacion",
+    "estado_cubierta",
+    "desperfectos",
+    "dedicatorias",
+    "dimensiones",
+    "alto",
+    "ancho",
+    "fondo",
+    "peso",
+    "unidad_peso",
+    "paginas",
+    "plantilla_envio",
+    "palabras_clave",
+    "catalogo_1",
+    "catalogo_2",
+    "catalogo_3",
+    "url_imagenes",
+    "precio",
+    "cantidad",
+    "descripcion",
+)
+CORE_BOOKS_EDITABLE_COLUMNS: tuple[str, ...] = tuple(column for column in CORE_BOOKS_COLUMNS if column != "id")
+CORE_BOOKS_INT_FIELDS = {"numero_coleccion", "alto", "ancho", "fondo", "peso", "paginas", "cantidad"}
+CORE_BOOKS_DECIMAL_FIELDS = {"precio"}
 
 
 def normalize_block(value: str | None) -> str | None:
@@ -274,9 +333,10 @@ def _create_books_core_schema(con: Any) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_books_idioma ON books(idioma)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_books_palabras_clave ON books(palabras_clave)")
 
+    con.execute("CREATE SCHEMA IF NOT EXISTS ref")
     con.execute(
         """
-        CREATE TABLE IF NOT EXISTS iso_639_3 (
+        CREATE TABLE IF NOT EXISTS ref.iso_639_3 (
             id VARCHAR,
             part2b VARCHAR,
             part2t VARCHAR,
@@ -285,10 +345,42 @@ def _create_books_core_schema(con: Any) -> None:
             language_yype VARCHAR,
             ref_name VARCHAR,
             comment VARCHAR,
-            nombre_spa VARCHAR
+            spa_name VARCHAR
         )
         """
     )
+
+    # One-time migration from legacy main.iso_639_3 -> ref.iso_639_3.
+    main_iso_exists = bool(
+        con.execute(
+            """
+            SELECT COUNT(*) > 0
+            FROM information_schema.tables
+            WHERE table_schema = 'main' AND table_name = 'iso_639_3'
+            """
+        ).fetchone()[0]
+    )
+    if main_iso_exists:
+        legacy_columns = {
+            str(row[0]).strip().lower()
+            for row in con.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'main' AND table_name = 'iso_639_3'
+                """
+            ).fetchall()
+        }
+        spa_col = "spa_name" if "spa_name" in legacy_columns else ("nombre_spa" if "nombre_spa" in legacy_columns else "NULL")
+        con.execute(
+            f"""
+            INSERT INTO ref.iso_639_3 (id, part2b, part2t, part1, scope, language_yype, ref_name, comment, spa_name)
+            SELECT id, part2b, part2t, part1, scope, language_yype, ref_name, comment, {spa_col}
+            FROM main.iso_639_3
+            WHERE NOT EXISTS (SELECT 1 FROM ref.iso_639_3)
+            """
+        )
+        con.execute("DROP TABLE IF EXISTS main.iso_639_3")
 
     con.execute(
         """
@@ -296,14 +388,16 @@ def _create_books_core_schema(con: Any) -> None:
             table_name VARCHAR,
             field_name VARCHAR,
             field_value VARCHAR,
+            sort_order INTEGER DEFAULT 0,
             PRIMARY KEY (table_name, field_name, field_value)
         )
         """
     )
+    con.execute("ALTER TABLE book_field_allowed_values ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0")
     con.execute("DELETE FROM book_field_allowed_values WHERE table_name = 'books'")
     con.executemany(
-        "INSERT INTO book_field_allowed_values (table_name, field_name, field_value) VALUES (?, ?, ?)",
-        [("books", field_name, field_value) for field_name, field_value in BOOK_ALLOWED_VALUES],
+        "INSERT INTO book_field_allowed_values (table_name, field_name, field_value, sort_order) VALUES (?, ?, ?, ?)",
+        [("books", field_name, field_value, index) for index, (field_name, field_value) in enumerate(BOOK_ALLOWED_VALUES)],
     )
 
     con.execute(
@@ -319,8 +413,8 @@ def _create_books_core_schema(con: Any) -> None:
                 WHEN strpos(COALESCE(b.idioma, ''), ';') > 0 THEN 'MUL'
                 ELSE (
                     SELECT upper(i.id)
-                    FROM iso_639_3 i
-                    WHERE i.nombre_spa = b.idioma
+                    FROM ref.iso_639_3 i
+                    WHERE i.spa_name = b.idioma
                     LIMIT 1
                 )
             END AS language,
@@ -349,19 +443,12 @@ def init_table() -> None:
                 module VARCHAR,
                 seq VARCHAR,
 
-                image_path VARCHAR,
-                image_count INTEGER DEFAULT 0,
-
-                credits_text VARCHAR,
-                isbn_raw VARCHAR,
-                isbn VARCHAR,
                 ocr_status VARCHAR,
                 ocr_error VARCHAR,
                 ocr_provider VARCHAR,
                 ocr_model VARCHAR,
                 ocr_trace_json VARCHAR,
 
-                metadata_json VARCHAR,
                 metadata_status VARCHAR,
                 metadata_error VARCHAR,
 
@@ -385,6 +472,13 @@ def init_table() -> None:
             )
             """
         )
+
+        # Keep schema coherent if legacy columns exist in an already-created DB.
+        for legacy_column in ("image_path", "image_count", "credits_text", "isbn_raw", "isbn", "metadata_json"):
+            try:
+                con.execute(f"ALTER TABLE book_items DROP COLUMN IF EXISTS {legacy_column}")
+            except Exception:
+                pass
 
         con.execute(
             """
@@ -435,8 +529,6 @@ def init_table() -> None:
 
 
 def _payload_column(payload_type: str) -> str:
-    if payload_type == "metadata":
-        return "metadata_json"
     if payload_type == "catalog":
         return "catalog_json"
     if payload_type == "ocr_trace":
@@ -544,6 +636,151 @@ def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any]) -> 
                     fetched_at,
                 ],
             )
+
+
+def _empty_metadata(book_id: str, isbn: str | None = None) -> dict[str, Any]:
+    return {
+        "id": book_id,
+        "isbn": str(isbn or "").strip() or None,
+        "google": {},
+        "open_library": {},
+        "isbndb": {},
+        "errors": {},
+    }
+
+
+def _metadata_from_rows(book_id: str, rows: list[tuple[Any, ...]]) -> dict[str, Any]:
+    metadata = _empty_metadata(book_id)
+    fetched_values: list[str] = []
+
+    for row in rows:
+        provider = str(row[0] or "").strip()
+        source_key = METADATA_PROVIDER_REVERSE_MAP.get(provider)
+        if not source_key:
+            continue
+
+        payload = _load_json(row[1], {})
+        metadata[source_key] = payload if isinstance(payload, dict) else {}
+
+        isbn = str(row[2] or "").strip()
+        if isbn and not metadata.get("isbn"):
+            metadata["isbn"] = isbn
+
+        provider_error = str(row[3] or "").strip()
+        if provider_error:
+            errors = metadata.get("errors")
+            if isinstance(errors, dict):
+                errors[source_key] = provider_error
+            else:
+                metadata["errors"] = {source_key: provider_error}
+
+        fetched_at = str(row[4] or "").strip()
+        if fetched_at:
+            fetched_values.append(fetched_at)
+
+    if fetched_values:
+        metadata["fetched_at"] = max(fetched_values)
+
+    return metadata
+
+
+def _load_metadata_from_sources(book_id: str) -> dict[str, Any]:
+    with get_connection() as con:
+        rows = con.execute(
+            """
+            SELECT provider, payload_json, isbn, provider_error, fetched_at
+            FROM book_bibliographic_sources
+            WHERE book_id = ?
+            ORDER BY provider
+            """,
+            [book_id],
+        ).fetchall()
+
+    if not rows:
+        return _empty_metadata(book_id)
+
+    return _metadata_from_rows(book_id, rows)
+
+
+def _fetch_metadata_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not book_ids:
+        return {}
+
+    placeholders = ", ".join(["?"] * len(book_ids))
+    query = (
+        "SELECT book_id, provider, payload_json, isbn, provider_error, fetched_at "
+        "FROM book_bibliographic_sources "
+        f"WHERE book_id IN ({placeholders}) "
+        "ORDER BY book_id, provider"
+    )
+
+    grouped: dict[str, list[tuple[Any, ...]]] = {}
+    with get_connection() as con:
+        rows = con.execute(query, book_ids).fetchall()
+
+    for row in rows:
+        book_id = str(row[0] or "").strip()
+        if not book_id:
+            continue
+        grouped.setdefault(book_id, []).append((row[1], row[2], row[3], row[4], row[5]))
+
+    return {book_id: _metadata_from_rows(book_id, grouped_rows) for book_id, grouped_rows in grouped.items()}
+
+
+def _clear_ocr_data(book_id: str) -> None:
+    with get_connection() as con:
+        con.execute("DELETE FROM book_ocr_data WHERE book_id = ?", [book_id])
+
+
+def _load_ocr_data(book_id: str) -> dict[str, Any]:
+    with get_connection() as con:
+        row = con.execute(
+            """
+            SELECT extracted_text, isbn_raw, isbn, isbn_list
+            FROM book_ocr_data
+            WHERE book_id = ?
+            """,
+            [book_id],
+        ).fetchone()
+
+    if not row:
+        return {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None}
+
+    return {
+        "credits_text": str(row[0]).strip() if row[0] is not None else None,
+        "isbn_raw": str(row[1]).strip() if row[1] is not None else None,
+        "isbn": str(row[2]).strip() if row[2] is not None else None,
+        "isbn_list": str(row[3]).strip() if row[3] is not None else None,
+    }
+
+
+def _fetch_ocr_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not book_ids:
+        return {}
+
+    placeholders = ", ".join(["?"] * len(book_ids))
+    query = (
+        "SELECT book_id, extracted_text, isbn_raw, isbn, isbn_list "
+        "FROM book_ocr_data "
+        f"WHERE book_id IN ({placeholders})"
+    )
+
+    mapped: dict[str, dict[str, Any]] = {}
+    with get_connection() as con:
+        rows = con.execute(query, book_ids).fetchall()
+
+    for row in rows:
+        book_id = str(row[0] or "").strip()
+        if not book_id:
+            continue
+        mapped[book_id] = {
+            "credits_text": str(row[1]).strip() if row[1] is not None else None,
+            "isbn_raw": str(row[2]).strip() if row[2] is not None else None,
+            "isbn": str(row[3]).strip() if row[3] is not None else None,
+            "isbn_list": str(row[4]).strip() if row[4] is not None else None,
+        }
+
+    return mapped
 
 
 def _clear_bibliographic_sources(book_id: str) -> None:
@@ -709,6 +946,7 @@ def _row_to_dict(
     *,
     image_map: dict[str, list[str]] | None = None,
     metadata_map: dict[str, Any] | None = None,
+    ocr_map: dict[str, dict[str, Any]] | None = None,
     catalog_map: dict[str, Any] | None = None,
     ocr_trace_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -720,15 +958,23 @@ def _row_to_dict(
     else:
         image_paths = _load_book_images(book_id, fallback=[]) if book_id else []
 
+    payload["image_path"] = image_paths[0] if image_paths else None
     payload["image_paths"] = image_paths
-    if image_paths:
-        payload["image_count"] = len(image_paths)
-        payload["image_path"] = image_paths[0]
+    payload["image_count"] = len(image_paths)
 
     if metadata_map is not None:
         payload["metadata"] = metadata_map.get(book_id, {})
     else:
-        payload["metadata"] = _load_payload(book_id, "metadata", default={}) if book_id else {}
+        payload["metadata"] = _load_metadata_from_sources(book_id) if book_id else {}
+
+    if ocr_map is not None:
+        ocr_data = ocr_map.get(book_id, {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None})
+    else:
+        ocr_data = _load_ocr_data(book_id) if book_id else {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None}
+    payload["credits_text"] = ocr_data.get("credits_text")
+    payload["isbn_raw"] = ocr_data.get("isbn_raw")
+    payload["isbn"] = ocr_data.get("isbn")
+    payload["isbn_list"] = ocr_data.get("isbn_list")
 
     if catalog_map is not None:
         payload["catalog"] = catalog_map.get(book_id, {})
@@ -804,7 +1050,8 @@ def list_books(
     book_ids = [str(row[id_index]) for row in rows if str(row[id_index]).strip()]
 
     image_map = _fetch_image_map(book_ids)
-    metadata_map = _fetch_payload_map(book_ids, "metadata", default={})
+    metadata_map = _fetch_metadata_map(book_ids)
+    ocr_map = _fetch_ocr_map(book_ids)
     catalog_map = _fetch_payload_map(book_ids, "catalog", default={})
     ocr_trace_map = _fetch_payload_map(book_ids, "ocr_trace", default={})
 
@@ -814,6 +1061,7 @@ def list_books(
             row,
             image_map=image_map,
             metadata_map=metadata_map,
+            ocr_map=ocr_map,
             catalog_map=catalog_map,
             ocr_trace_map=ocr_trace_map,
         )
@@ -999,9 +1247,6 @@ def reset_from_stage(book_id: str, stage: str) -> None:
     if normalized_stage == "ocr":
         fields.update(
             {
-                "credits_text": None,
-                "isbn_raw": None,
-                "isbn": None,
                 "ocr_status": None,
                 "ocr_error": None,
                 "ocr_provider": None,
@@ -1016,9 +1261,9 @@ def reset_from_stage(book_id: str, stage: str) -> None:
             }
         )
         _clear_payload(book_id, "ocr_trace")
-        _clear_payload(book_id, "metadata")
         _clear_payload(book_id, "catalog")
         _clear_bibliographic_sources(book_id)
+        _clear_ocr_data(book_id)
     elif normalized_stage == "metadata":
         fields.update(
             {
@@ -1031,7 +1276,6 @@ def reset_from_stage(book_id: str, stage: str) -> None:
                 "cover_error": None,
             }
         )
-        _clear_payload(book_id, "metadata")
         _clear_payload(book_id, "catalog")
         _clear_bibliographic_sources(book_id)
     elif normalized_stage == "catalog":
@@ -1055,14 +1299,6 @@ def reset_from_stage(book_id: str, stage: str) -> None:
         )
 
     _update_book(book_id, fields)
-    if normalized_stage == "ocr":
-        _upsert_ocr_data(
-            book_id=book_id,
-            credits_text=None,
-            isbn_raw=None,
-            isbn=None,
-            trace=None,
-        )
     refresh_pipeline_stage(book_id)
 
 
@@ -1161,7 +1397,6 @@ def ingest_covers(
 
     for book_id, image_paths in grouped.items():
         image_paths = sorted(set(image_paths))
-        primary_image = _image_filename(image_paths[0]) if image_paths else None
         parts = split_book_id(book_id)
         block_value = parts[1] if parts else None
         module_value = parts[0] if parts else None
@@ -1174,30 +1409,20 @@ def ingest_covers(
                     """
                     INSERT INTO book_items (
                         id, block, module, seq,
-                        image_path, image_count,
                         pipeline_stage, workflow_status, workflow_attempt,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     [
                         book_id,
                         block_value,
                         module_value,
                         seq,
-                        primary_image,
-                        len(image_paths),
                     ],
                 )
 
             _replace_book_images(book_id, image_paths)
-            _upsert_ocr_data(
-                book_id=book_id,
-                credits_text=None,
-                isbn_raw=None,
-                isbn=None,
-                trace=None,
-            )
             inserted += 1
             continue
 
@@ -1209,13 +1434,10 @@ def ingest_covers(
 
         changed = merged_paths != previous_paths
         fields = {
-            "image_count": len(merged_paths),
             "block": block_value,
             "module": module_value,
             "seq": seq,
         }
-        if merged_paths:
-            fields["image_path"] = _image_filename(merged_paths[0])
 
         _update_book(book_id, fields)
         _replace_book_images(book_id, merged_paths)
@@ -1245,7 +1467,7 @@ def ensure_local_image_path(book_id: str) -> str | None:
     if not book:
         return None
 
-    paths = [str(book.get("image_path") or "").strip()]
+    paths: list[str] = []
     for value in book.get("image_paths", []):
         text = str(value).strip()
         if text and text not in paths:
@@ -1276,9 +1498,6 @@ def update_ocr(
     _update_book(
         book_id,
         {
-            "credits_text": credits_text,
-            "isbn_raw": isbn_raw,
-            "isbn": isbn,
             "ocr_status": status,
             "ocr_error": error,
             "ocr_provider": provider,
@@ -1304,7 +1523,6 @@ def update_metadata(book_id: str, *, metadata: dict[str, Any], status: str, erro
             "metadata_error": error,
         },
     )
-    _replace_payload(book_id, "metadata", metadata)
     _upsert_bibliographic_sources(book_id=book_id, metadata=metadata)
     refresh_pipeline_stage(book_id)
 
@@ -1318,6 +1536,8 @@ def update_catalog(book_id: str, *, catalog: dict[str, Any], status: str, error:
         },
     )
     _replace_payload(book_id, "catalog", catalog)
+    if status in {"built", "partial", "manual"} and isinstance(catalog, dict):
+        sync_core_book_from_catalog(book_id)
     refresh_pipeline_stage(book_id)
 
 
@@ -1396,6 +1616,566 @@ def book_ids_for_workflow(
         module=module,
     )
     return [str(row.get("id")) for row in rows if str(row.get("id") or "").strip()]
+
+
+def _json_safe_db_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _as_clean_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _list_to_text(value: Any, *, separator: str = "; ") -> str | None:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return separator.join(items) if items else None
+    text = str(value or "").strip()
+    return text or None
+
+
+def _first_image_filename(book_id: str) -> str | None:
+    with get_connection() as con:
+        row = con.execute(
+            """
+            SELECT filename
+            FROM book_image_files
+            WHERE book_id = ?
+            ORDER BY n_imagen
+            LIMIT 1
+            """,
+            [book_id],
+        ).fetchone()
+    if not row:
+        return None
+    filename = str(row[0] or "").strip()
+    return filename or None
+
+
+def get_books_allowed_values() -> dict[str, list[str]]:
+    with get_connection() as con:
+        rows = con.execute(
+            """
+            SELECT field_name, field_value
+            FROM book_field_allowed_values
+            WHERE table_name = 'books'
+            ORDER BY field_name, sort_order, field_value
+            """
+        ).fetchall()
+
+    grouped: dict[str, list[str]] = {}
+    for field_name, field_value in rows:
+        name = str(field_name or "").strip()
+        value = str(field_value or "").strip()
+        if not name or not value:
+            continue
+        grouped.setdefault(name, [])
+        if value not in grouped[name]:
+            grouped[name].append(value)
+    return grouped
+
+
+def _normalize_core_input_value(field: str, value: Any) -> Any:
+    if field not in CORE_BOOKS_EDITABLE_COLUMNS:
+        raise ValueError(f"Field is not editable: {field}")
+
+    if value is None:
+        return None
+
+    if field in CORE_BOOKS_INT_FIELDS:
+        text = str(value).strip()
+        if text == "":
+            return None
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid integer value for {field}: {value}") from None
+
+    if field in CORE_BOOKS_DECIMAL_FIELDS:
+        text = str(value).strip().replace(",", ".")
+        text = text.replace("€", "").strip()
+        if text == "":
+            return None
+        try:
+            return round(float(text), 2)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid decimal value for {field}: {value}") from None
+
+    text = str(value).strip()
+    return text or None
+
+
+def _split_unique_values(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    chunks = re.split(r"[;\n]+", text)
+    output: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        item = str(chunk).strip()
+        key = item.lower()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
+def _format_names(value: Any) -> str:
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in _split_unique_values(value):
+        if "," in raw:
+            left, right = raw.split(",", maxsplit=1)
+            normalized = f"{right.strip()} {left.strip()}".strip()
+        else:
+            normalized = raw
+
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        names.append(normalized)
+
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} y {names[1]}"
+    return f"{', '.join(names[:-1])} y {names[-1]}"
+
+
+def _format_volume(value: Any, *, with_collection_title: bool) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if "vol" in lowered or "tomo" in lowered:
+        return text
+    if with_collection_title:
+        return f"vol. {text}"
+    return f"Volumen {text}"
+
+
+def build_core_description(record: dict[str, Any]) -> str:
+    author_country_items = _split_unique_values(record.get("pais_autor"))
+    author_countries = ", ".join(author_country_items)
+    author_country_keys = {item.lower() for item in author_country_items}
+    publication_country = _as_clean_text(record.get("pais_publicacion"))
+
+    parts: list[str] = []
+
+    categoria = _as_clean_text(record.get("categoria"))
+    if categoria:
+        parts.append(f"{categoria}.")
+
+    idioma = _as_clean_text(record.get("idioma"))
+    if idioma and idioma.lower() != "español":
+        if ";" in idioma:
+            parts.append(f"Idiomas: {idioma.replace('; ', ', ')}.")
+        else:
+            parts.append(f"Idioma: {idioma}.")
+
+    genero = _as_clean_text(record.get("genero"))
+    if genero:
+        parts.append(f"{genero}.")
+
+    if author_countries:
+        parts.append(f"{author_countries}.")
+
+    if publication_country and publication_country.lower() not in author_country_keys:
+        parts.append(f"{publication_country}.")
+
+    editor = _format_names(record.get("editor"))
+    if editor:
+        parts.append(f"Edición a cargo de {editor}.")
+
+    coleccion = _as_clean_text(record.get("coleccion"))
+    numero_coleccion = _as_clean_text(record.get("numero_coleccion"))
+    if coleccion:
+        if numero_coleccion:
+            parts.append(f"{coleccion}, nº {numero_coleccion}.")
+        else:
+            parts.append(f"{coleccion}.")
+
+    editorial = _as_clean_text(record.get("editorial"))
+    if editorial:
+        parts.append(f"{editorial}.")
+
+    anio = _as_clean_text(record.get("anio"))
+    if anio:
+        parts.append(f"{anio}.")
+
+    edicion = _as_clean_text(record.get("edicion"))
+    if edicion:
+        parts.append(f"{edicion.replace('; ', ', ')}.")
+
+    numero_impresion = _as_clean_text(record.get("numero_impresion"))
+    if numero_impresion:
+        parts.append(f"{numero_impresion}.")
+
+    obra_completa = _as_clean_text(record.get("obra_completa"))
+    volumen = _as_clean_text(record.get("volumen"))
+    titulo = _as_clean_text(record.get("titulo"))
+    if obra_completa and obra_completa != titulo:
+        volume_text = _format_volume(volumen, with_collection_title=True) if volumen else ""
+        if volume_text:
+            parts.append(f"{obra_completa}, {volume_text}.")
+        else:
+            parts.append(f"{obra_completa}.")
+    elif volumen:
+        parts.append(f"{_format_volume(volumen, with_collection_title=False)}.")
+
+    paginas = _as_clean_text(record.get("paginas"))
+    if paginas:
+        parts.append(f"{paginas} págs.")
+
+    dimensiones = _as_clean_text(record.get("dimensiones"))
+    if dimensiones:
+        parts.append(f"{dimensiones}.")
+
+    peso = _as_clean_text(record.get("peso"))
+    if peso:
+        parts.append(f"{peso} g.")
+
+    detalle_encuadernacion = _as_clean_text(record.get("detalle_encuadernacion"))
+    if detalle_encuadernacion:
+        parts.append(f"{detalle_encuadernacion}.")
+
+    desperfectos = _as_clean_text(record.get("desperfectos"))
+    if desperfectos:
+        parts.append(f"{desperfectos}.")
+
+    introduccion = _format_names(record.get("introduccion_de"))
+    if introduccion:
+        parts.append(f"Introducción de {introduccion}.")
+
+    epilogo = _format_names(record.get("epilogo_de"))
+    if epilogo:
+        parts.append(f"Epílogo de {epilogo}.")
+
+    traductor = _format_names(record.get("traductor"))
+    if traductor:
+        parts.append(f"Traducción de {traductor}.")
+
+    ilustraciones = _as_clean_text(record.get("ilustraciones"))
+    if ilustraciones:
+        parts.append(f"{ilustraciones}.")
+
+    fotografia = _format_names(record.get("fotografia_de"))
+    if fotografia:
+        parts.append(f"Fotografía de {fotografia}.")
+
+    ilustrador = _format_names(record.get("ilustrador"))
+    if ilustrador:
+        parts.append(f"Ilustraciones de {ilustrador}.")
+
+    description = " ".join(parts).strip()
+    book_id = _as_clean_text(record.get("id"))
+    if book_id:
+        suffix = f"Nº de ref. del artículo: {book_id}"
+        if description:
+            description = f"{description}\n\n{suffix}"
+        else:
+            description = suffix
+
+    return description
+
+
+def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> dict[str, Any]:
+    catalog = book.get("catalog") if isinstance(book.get("catalog"), dict) else {}
+    metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+
+    titulo = _as_clean_text(catalog.get("titulo"))
+    subtitulo = _as_clean_text(catalog.get("subtitulo"))
+    titulo_completo = _as_clean_text(catalog.get("titulo_completo"))
+    if not titulo_completo and titulo and subtitulo:
+        titulo_completo = f"{titulo}: {subtitulo}"
+    elif not titulo_completo:
+        titulo_completo = titulo
+
+    autor = _list_to_text(catalog.get("autor"), separator="; ")
+    idioma = _list_to_text(catalog.get("idioma"), separator="; ")
+    palabras = _list_to_text(catalog.get("palabras_clave"), separator=", ")
+
+    isbn = _as_clean_text(catalog.get("isbn")) or _as_clean_text(book.get("isbn")) or _as_clean_text(metadata.get("isbn"))
+    image_filename = _first_image_filename(book_id)
+
+    pages = catalog.get("paginas")
+    pages_int: int | None = None
+    if isinstance(pages, int):
+        pages_int = pages
+    else:
+        pages_text = _as_clean_text(pages)
+        if pages_text:
+            try:
+                pages_int = int(float(pages_text))
+            except (TypeError, ValueError):
+                pages_int = None
+
+    def _as_int_value(value: Any) -> int | None:
+        if isinstance(value, int):
+            return value
+        text = _as_clean_text(value)
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "id": book_id,
+        "titulo": titulo,
+        "titulo_corto": titulo,
+        "subtitulo": subtitulo,
+        "titulo_completo": titulo_completo,
+        "autor": autor,
+        "pais_autor": _list_to_text(catalog.get("pais_autor"), separator="; "),
+        "editorial": _as_clean_text(catalog.get("editorial")),
+        "pais_publicacion": _as_clean_text(catalog.get("pais_publicacion")),
+        "anio": _as_clean_text(catalog.get("anio")),
+        "isbn": isbn,
+        "idioma": idioma,
+        "edicion": _list_to_text(catalog.get("edicion"), separator="; "),
+        "numero_impresion": _as_clean_text(catalog.get("numero_impresion")),
+        "coleccion": _as_clean_text(catalog.get("coleccion")),
+        "numero_coleccion": _as_int_value(catalog.get("numero_coleccion")),
+        "obra_completa": _as_clean_text(catalog.get("obra_completa")),
+        "volumen": _as_clean_text(catalog.get("volumen")),
+        "traductor": _list_to_text(catalog.get("traductor"), separator="; "),
+        "ilustrador": _list_to_text(catalog.get("ilustrador"), separator="; "),
+        "editor": _list_to_text(catalog.get("editor"), separator="; "),
+        "fotografia_de": _list_to_text(catalog.get("fotografia_de"), separator="; "),
+        "introduccion_de": _list_to_text(catalog.get("introduccion_de"), separator="; "),
+        "epilogo_de": _list_to_text(catalog.get("epilogo_de"), separator="; "),
+        "categoria": _as_clean_text(catalog.get("categoria")),
+        "genero": _as_clean_text(catalog.get("genero")),
+        "ilustraciones": _as_clean_text(catalog.get("ilustraciones")),
+        "encuadernacion": _as_clean_text(catalog.get("encuadernacion")),
+        "paginas": pages_int,
+        "palabras_clave": palabras,
+        "alto": _as_int_value(catalog.get("alto")),
+        "ancho": _as_int_value(catalog.get("ancho")),
+        "fondo": _as_int_value(catalog.get("fondo")),
+        "peso": _as_int_value(catalog.get("peso")),
+        "url_imagenes": image_filename,
+        "tipo_articulo": "Libros",
+        "estado_stock": "En venta",
+        "estado_carga": "Para subir",
+        "cantidad": 1,
+        "precio": 1.00,
+        "unidad_peso": "GRAMS",
+    }
+
+
+def sync_core_book_from_catalog(book_id: str) -> dict[str, Any] | None:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id:
+        return None
+
+    book = get_book(normalized_id)
+    if not book:
+        return None
+
+    values = _core_autofill_fields_from_catalog(normalized_id, book)
+
+    with get_connection() as con:
+        existing_cur = con.execute(
+            f"SELECT {', '.join(CORE_BOOKS_COLUMNS)} FROM books WHERE id = ?",
+            [normalized_id],
+        )
+        existing_row = existing_cur.fetchone()
+        if existing_row is None:
+            insert_columns = [column for column in CORE_BOOKS_COLUMNS if values.get(column) not in (None, "")]
+            if "id" not in insert_columns:
+                insert_columns = ["id", *insert_columns]
+            insert_params = [values.get(column) for column in insert_columns]
+            placeholders = ", ".join(["?"] * len(insert_columns))
+            con.execute(
+                f"INSERT INTO books ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                insert_params,
+            )
+        else:
+            existing = {column: existing_row[index] for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+            updates: dict[str, Any] = {}
+            for column, value in values.items():
+                if column == "id":
+                    continue
+                if value in (None, ""):
+                    continue
+                current = existing.get(column)
+                if current in (None, ""):
+                    updates[column] = value
+
+            if updates:
+                assignments = ", ".join(f"{column} = ?" for column in updates)
+                params = [updates[column] for column in updates]
+                params.append(normalized_id)
+                con.execute(f"UPDATE books SET {assignments} WHERE id = ?", params)
+
+        cur = con.execute(
+            f"SELECT {', '.join(CORE_BOOKS_COLUMNS)} FROM books WHERE id = ?",
+            [normalized_id],
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+    return {column: _json_safe_db_value(row[index]) for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+
+
+def bootstrap_core_books(
+    *,
+    block: str | None,
+    module: str | None,
+    limit: int = 2000,
+) -> dict[str, Any]:
+    scope_block, scope_module = resolve_scope(block, module, require=False)
+
+    sql = (
+        "SELECT id FROM book_items "
+        "WHERE COALESCE(catalog_status, '') IN ('built', 'partial', 'manual')"
+    )
+    params: list[Any] = []
+    if scope_block:
+        sql += " AND block = ?"
+        params.append(scope_block)
+    if scope_module:
+        sql += " AND module = ?"
+        params.append(scope_module)
+    sql += " ORDER BY id LIMIT ?"
+    params.append(int(limit))
+
+    with get_connection() as con:
+        ids = [str(row[0]) for row in con.execute(sql, params).fetchall() if str(row[0]).strip()]
+
+    inserted_or_updated = 0
+    for book_id in ids:
+        result = sync_core_book_from_catalog(book_id)
+        if result is not None:
+            inserted_or_updated += 1
+
+    return {
+        "scope_block": scope_block,
+        "scope_module": scope_module,
+        "requested": len(ids),
+        "upserted": inserted_or_updated,
+    }
+
+
+def list_core_books(
+    *,
+    limit: int = 500,
+    block: str | None = None,
+    module: str | None = None,
+) -> list[dict[str, Any]]:
+    scope_block, scope_module = resolve_scope(block, module, require=False)
+
+    sql = (
+        "SELECT b.id, b.titulo, b.autor, b.editorial, b.estado_stock, b.estado_carga, b.precio, "
+        "bi.block, bi.module "
+        "FROM books b "
+        "LEFT JOIN book_items bi ON bi.id = b.id "
+    )
+    where: list[str] = []
+    params: list[Any] = []
+    if scope_block:
+        where.append("bi.block = ?")
+        params.append(scope_block)
+    if scope_module:
+        where.append("bi.module = ?")
+        params.append(scope_module)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY b.id LIMIT ?"
+    params.append(int(limit))
+
+    with get_connection() as con:
+        rows = con.execute(sql, params).fetchall()
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        output.append(
+            {
+                "id": str(row[0] or "").strip(),
+                "titulo": _as_clean_text(row[1]),
+                "autor": _as_clean_text(row[2]),
+                "editorial": _as_clean_text(row[3]),
+                "estado_stock": _as_clean_text(row[4]),
+                "estado_carga": _as_clean_text(row[5]),
+                "precio": _json_safe_db_value(row[6]),
+                "block": _as_clean_text(row[7]),
+                "module": _as_clean_text(row[8]),
+            }
+        )
+    return output
+
+
+def get_core_book(book_id: str, *, bootstrap: bool = True) -> dict[str, Any] | None:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id:
+        return None
+
+    if bootstrap:
+        sync_core_book_from_catalog(normalized_id)
+
+    with get_connection() as con:
+        cur = con.execute(
+            f"SELECT {', '.join(CORE_BOOKS_COLUMNS)} FROM books WHERE id = ?",
+            [normalized_id],
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {column: _json_safe_db_value(row[index]) for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+
+
+def update_core_book(
+    book_id: str,
+    *,
+    fields: dict[str, Any],
+    recompute_description: bool = False,
+) -> dict[str, Any]:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id:
+        raise ValueError(f"Invalid book id: {book_id}")
+
+    current = get_core_book(normalized_id, bootstrap=True)
+    if current is None:
+        raise ValueError(f"Book not found in core table: {normalized_id}")
+
+    updates: dict[str, Any] = {}
+    for raw_key, raw_value in fields.items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        if key not in CORE_BOOKS_EDITABLE_COLUMNS:
+            continue
+        updates[key] = _normalize_core_input_value(key, raw_value)
+
+    merged = {**current, **updates}
+    if recompute_description:
+        updates["descripcion"] = build_core_description(merged)
+
+    if not updates:
+        return current
+
+    assignments = ", ".join(f"{field} = ?" for field in updates)
+    params = [updates[field] for field in updates]
+    params.append(normalized_id)
+    with get_connection() as con:
+        con.execute(f"UPDATE books SET {assignments} WHERE id = ?", params)
+
+    refreshed = get_core_book(normalized_id, bootstrap=False)
+    if refreshed is None:
+        raise ValueError(f"Book not found after update: {normalized_id}")
+    return refreshed
 
 
 def _append_scope_where(sql: str, scope_where: list[str]) -> str:

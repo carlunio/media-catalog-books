@@ -50,22 +50,49 @@ with col_b:
 with col_c:
     max_attempts = st.number_input("Reintentos", min_value=0, max_value=20, value=2)
 
-default_ollama_model = "glm-ocr:latest"
+default_ocr_ollama_model = "glm-ocr:latest"
+default_catalog_ollama_model = "qwen2.5:14b"
+default_catalog_openai_model = "gpt-4o-mini"
+
 st.text_input("OCR provider", value="ollama", disabled=True)
 ocr_provider = "ollama"
 try:
     models = load_ollama_models()
 except Exception:
     models = []
-options = [default_ollama_model] + [name for name in models if name != default_ollama_model]
+options = [default_ocr_ollama_model] + [name for name in models if name != default_ocr_ollama_model]
 if len(options) > 1:
     ocr_model = st.selectbox("Modelo OCR", options, index=0)
 else:
     ocr_model = st.text_input(
         "Modelo OCR",
-        value=default_ollama_model,
-        placeholder=default_ollama_model,
+        value=default_ocr_ollama_model,
+        placeholder=default_ocr_ollama_model,
     )
+
+st.caption("Configuracion de catalogacion automatica")
+catalog_col_a, catalog_col_b = st.columns([1, 2])
+with catalog_col_a:
+    catalog_provider = st.selectbox("Provider catalogo", ["openai", "ollama"], index=0)
+with catalog_col_b:
+    if catalog_provider == "ollama":
+        catalog_options = [default_catalog_ollama_model] + [
+            name for name in models if name != default_catalog_ollama_model
+        ]
+        if len(catalog_options) > 1:
+            catalog_model = st.selectbox("Modelo catalogo", catalog_options, index=0)
+        else:
+            catalog_model = st.text_input(
+                "Modelo catalogo",
+                value=default_catalog_ollama_model,
+                placeholder=default_catalog_ollama_model,
+            )
+    else:
+        catalog_model = st.text_input(
+            "Modelo catalogo",
+            value=default_catalog_openai_model,
+            placeholder=default_catalog_openai_model,
+        )
 
 if st.button("Ejecutar etapa", type="primary"):
     payload = {
@@ -79,6 +106,8 @@ if st.button("Ejecutar etapa", type="primary"):
         "max_attempts": int(max_attempts),
         "ocr_provider": ocr_provider,
         "ocr_model": ocr_model.strip() or None,
+        "catalog_provider": catalog_provider,
+        "catalog_model": catalog_model.strip() or None,
     }
     try:
         result = api_post("/workflow/run", json=payload, timeout=600.0)

@@ -356,11 +356,13 @@ with right:
         st.text_input("ISBN raw", key=isbn_raw_key)
         st.text_input("ISBN validado", key=isbn_key)
 
-        form_col_a, form_col_b = st.columns(2)
+        form_col_a, form_col_b, form_col_c = st.columns(3)
         with form_col_a:
             suggest = st.form_submit_button("Extraer ISBN desde texto")
         with form_col_b:
             save = st.form_submit_button("Guardar OCR revisado", type="primary")
+        with form_col_c:
+            consolidate_isbn = st.form_submit_button("Consolidar ISBN en BBDD")
 
     if suggest:
         suggested = _derive_isbn_from_text(st.session_state.get(credits_key, ""))
@@ -391,6 +393,27 @@ with right:
             st.rerun()
         except Exception as exc:
             st.error(f"No se pudo actualizar OCR: {exc}")
+
+    if consolidate_isbn:
+        payload = {
+            # Consolidar ISBN sin sobreescribir manualmente el texto OCR vigente.
+            "credits_text": str(book.get("credits_text") or "").strip() or None,
+            "isbn_raw": str(st.session_state.get(isbn_raw_key, "")).strip() or None,
+            "isbn": str(st.session_state.get(isbn_key, "")).strip() or None,
+        }
+        try:
+            result = api_put(f"/books/{selected_id}/ocr", json=payload, timeout=20.0)
+            st.success("ISBN consolidado en BBDD")
+            if isinstance(result, dict):
+                isbn_value = str(result.get("isbn") or "").strip()
+                isbn_raw_value = str(result.get("isbn_raw") or "").strip()
+                st.session_state[isbn_key] = isbn_value
+                st.session_state[isbn_raw_key] = isbn_raw_value
+                with st.expander("Resultado de consolidacion ISBN", expanded=False):
+                    st.json(result)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo consolidar ISBN: {exc}")
 
 st.divider()
 st.subheader("Acciones de review")

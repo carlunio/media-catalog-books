@@ -67,7 +67,9 @@ overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
 max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
 
 col_provider, col_model = st.columns([1, 2])
-default_ollama_model = "glm-ocr:latest"
+default_ocr_ollama_model = "glm-ocr:latest"
+default_catalog_ollama_model = "qwen2.5:14b"
+default_catalog_openai_model = "gpt-4o-mini"
 with col_provider:
     st.text_input("OCR provider", value="ollama", disabled=True)
     ocr_provider = "ollama"
@@ -78,11 +80,35 @@ with col_model:
         ollama_models = []
         st.warning(f"No se pudieron cargar modelos de Ollama: {exc}")
 
-    options = [default_ollama_model] + [name for name in ollama_models if name != default_ollama_model]
+    options = [default_ocr_ollama_model] + [name for name in ollama_models if name != default_ocr_ollama_model]
     if len(options) > 1:
         ocr_model = st.selectbox("Modelo OCR", options, index=0)
     else:
-        ocr_model = st.text_input("Modelo OCR", value=default_ollama_model, placeholder=default_ollama_model)
+        ocr_model = st.text_input("Modelo OCR", value=default_ocr_ollama_model, placeholder=default_ocr_ollama_model)
+
+st.caption("Configuracion de catalogacion automatica")
+cat_col_a, cat_col_b = st.columns([1, 2])
+with cat_col_a:
+    catalog_provider = st.selectbox("Provider catalogo", ["openai", "ollama"], index=0)
+with cat_col_b:
+    if catalog_provider == "ollama":
+        catalog_options = [default_catalog_ollama_model] + [
+            name for name in ollama_models if name != default_catalog_ollama_model
+        ]
+        if len(catalog_options) > 1:
+            catalog_model = st.selectbox("Modelo catalogo", catalog_options, index=0)
+        else:
+            catalog_model = st.text_input(
+                "Modelo catalogo",
+                value=default_catalog_ollama_model,
+                placeholder=default_catalog_ollama_model,
+            )
+    else:
+        catalog_model = st.text_input(
+            "Modelo catalogo",
+            value=default_catalog_openai_model,
+            placeholder=default_catalog_openai_model,
+        )
 
 if st.button("Ejecutar workflow", type="primary"):
     payload = {
@@ -96,6 +122,8 @@ if st.button("Ejecutar workflow", type="primary"):
         "max_attempts": int(max_attempts),
         "ocr_provider": ocr_provider,
         "ocr_model": ocr_model.strip() or None,
+        "catalog_provider": catalog_provider,
+        "catalog_model": catalog_model.strip() or None,
     }
     try:
         result = api_post("/workflow/run", json=payload, timeout=1800.0)
@@ -170,6 +198,8 @@ if review_queue:
                 payload = {"action": action, "max_attempts": int(max_attempts)}
                 payload["ocr_provider"] = ocr_provider
                 payload["ocr_model"] = ocr_model.strip() or None
+                payload["catalog_provider"] = catalog_provider
+                payload["catalog_model"] = catalog_model.strip() or None
                 result = api_post(f"/workflow/review/{selected_review_id}", json=payload, timeout=600.0)
                 st.success("Accion aplicada")
                 st.json(result)

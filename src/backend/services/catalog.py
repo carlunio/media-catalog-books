@@ -8,6 +8,7 @@ from ..config import (
     CATALOG_ARBITER_ENABLED,
     CATALOG_ARBITER_MIN_CONFIDENCE,
     CATALOG_ARBITER_PROVIDER,
+    CATALOG_PROVIDER,
     CATALOG_OLLAMA_MODEL,
     CATALOG_OPENAI_MODEL,
     OPENAI_API_KEY,
@@ -832,135 +833,316 @@ def _apply_arbiter_values(catalog: dict[str, Any], values: dict[str, Any], provi
         catalog["titulo_completo"] = title
 
 
-def build_catalog_payload(book: dict[str, Any]) -> dict[str, Any]:
+CATALOG_SYSTEM_PROMPT = (
+    "Eres un asistente experto en bibliografia. Tu tarea es consolidar informacion de libros "
+    "a partir de varias fuentes y devolver JSON estricto.\n\n"
+    "Criterios para conflictos:\n"
+    "1) Prioridad de fuentes: pagina de creditos > isbndb > open library > google books.\n"
+    "2) Si varias fuentes coinciden, usa la version mas completa y coherente.\n"
+    "3) Para editorial, usa nombre comercial (sin S.A., S.L., Ltd, Inc, etc.).\n"
+    "4) Para nombres de persona usa formato 'Apellido, Nombre'.\n"
+    "5) Paises/categoria/genero en espanol.\n"
+    "6) Si no esta claro, devuelve null.\n\n"
+    "Devuelve SOLO JSON valido."
+)
+
+CATALOG_HUMAN_PROMPT_TEMPLATE = (
+    "Aqui estan los datos extraidos de diversas fuentes sobre un libro:\n\n"
+    "1) Texto de la pagina de creditos:\n{credits}\n\n"
+    "2) Ficha Google Books:\n{google}\n\n"
+    "3) Ficha Open Library:\n{open_library}\n\n"
+    "4) Ficha ISBNdb:\n{isbndb}\n\n"
+    "Respuesta JSON esperada:\n"
+    "{\n"
+    '  "isbn": str|null,\n'
+    '  "titulo": str|null,\n'
+    '  "titulo_corto": str|null,\n'
+    '  "subtitulo": str|null,\n'
+    '  "titulo_completo": str|null,\n'
+    '  "autor": [str]|null,\n'
+    '  "pais_autor": [str]|null,\n'
+    '  "editorial": str|null,\n'
+    '  "pais_publicacion": str|null,\n'
+    '  "anio": int|null,\n'
+    '  "idioma": [str]|null,\n'
+    '  "edicion": [str]|null,\n'
+    '  "numero_impresion": str|null,\n'
+    '  "coleccion": str|null,\n'
+    '  "numero_coleccion": int|null,\n'
+    '  "obra_completa": str|null,\n'
+    '  "volumen": str|null,\n'
+    '  "editor": [str]|null,\n'
+    '  "traductor": [str]|null,\n'
+    '  "ilustrador": [str]|null,\n'
+    '  "introduccion_de": [str]|null,\n'
+    '  "epilogo_de": [str]|null,\n'
+    '  "fotografia_de": [str]|null,\n'
+    '  "categoria": str|null,\n'
+    '  "genero": str|null,\n'
+    '  "ilustraciones": str|null,\n'
+    '  "encuadernacion": str|null,\n'
+    '  "paginas": int|null,\n'
+    '  "palabras_clave": [str]|null\n'
+    "}"
+)
+
+GOOGLE_KEYS_TO_DROP = {
+    "allowAnonLogging",
+    "readingModes",
+    "imageLinks",
+    "previewLink",
+    "infoLink",
+    "canonicalVolumeLink",
+}
+
+OPEN_LIBRARY_KEYS_TO_DROP = {"url", "key"}
+ISBNDB_PATHS_TO_DROP = (("book", "image"), ("book", "dimensions_structured"), ("book", "dimensions"), ("book", "msrp"))
+
+
+def _delete_nested_key(payload: dict[str, Any], path: tuple[str, ...]) -> None:
+    if not path:
+        return
+    if len(path) == 1:
+        payload.pop(path[0], None)
+        return
+    head = payload.get(path[0])
+    if not isinstance(head, dict):
+        return
+    _delete_nested_key(head, path[1:])
+
+
+def _clean_sources_for_prompt(metadata: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    google = dict(metadata.get("google") or {}) if isinstance(metadata.get("google"), dict) else {}
+    open_library = dict(metadata.get("open_library") or {}) if isinstance(metadata.get("open_library"), dict) else {}
+    isbndb = json.loads(json.dumps(metadata.get("isbndb") or {})) if isinstance(metadata.get("isbndb"), dict) else {}
+
+    for key in GOOGLE_KEYS_TO_DROP:
+        google.pop(key, None)
+    for key in OPEN_LIBRARY_KEYS_TO_DROP:
+        open_library.pop(key, None)
+    for path in ISBNDB_PATHS_TO_DROP:
+        _delete_nested_key(isbndb, path)
+
+    return google, open_library, isbndb
+
+
+def _isbndb_dimensions_metric(metadata: dict[str, Any]) -> dict[str, Any]:
+    isbndb = metadata.get("isbndb") if isinstance(metadata.get("isbndb"), dict) else {}
+    book_payload = isbndb.get("book") if isinstance(isbndb.get("book"), dict) else {}
+    dimensions = book_payload.get("dimensions_structured") if isinstance(book_payload.get("dimensions_structured"), dict) else {}
+    if not dimensions:
+        return {}
+
+    inch_to_cm = 2.54
+    pounds_to_grams = 453.592
+    mapping = {"height": "alto", "length": "ancho", "width": "fondo", "weight": "peso"}
+    output: dict[str, Any] = {}
+
+    for key, meta in dimensions.items():
+        if key not in mapping or not isinstance(meta, dict):
+            continue
+        raw_value = meta.get("value")
+        unit = str(meta.get("unit") or "").strip().lower()
+        try:
+            number = float(raw_value)
+        except Exception:
+            continue
+
+        if unit == "inches":
+            converted = round(number * inch_to_cm, 2)
+        elif unit == "pounds":
+            converted = round(number * pounds_to_grams, 2)
+        else:
+            converted = round(number, 2)
+
+        output[mapping[key]] = converted
+
+    return output
+
+
+def _normalize_catalog_provider(value: str | None) -> str:
+    provider = str(value or CATALOG_PROVIDER).strip().lower()
+    if provider not in {"auto", "openai", "ollama"}:
+        provider = "auto"
+    if provider == "auto":
+        return "openai" if OPENAI_API_KEY else "ollama"
+    return provider
+
+
+def _catalog_model_for_provider(provider: str, model: str | None) -> str:
+    explicit = str(model or "").strip()
+    if explicit:
+        return explicit
+    if provider == "openai":
+        return CATALOG_OPENAI_MODEL
+    return CATALOG_OLLAMA_MODEL
+
+
+def _call_catalog_llm(*, provider: str, model: str, prompt: str) -> str:
+    if provider == "openai":
+        if not OPENAI_API_KEY:
+            raise ClientError("OPENAI_API_KEY is not configured for catalog provider openai")
+        return openai_text_chat(api_key=OPENAI_API_KEY, model=model, prompt=prompt)
+    if provider == "ollama":
+        return ollama_chat_text(model=model, prompt=prompt)
+    raise ClientError(f"Unsupported catalog provider: {provider}")
+
+
+def _split_text_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return _dedupe_list(items)
+    text = str(value).strip()
+    if not text:
+        return []
+    parts = [chunk.strip() for chunk in re.split(r"[;\n]", text) if chunk.strip()]
+    return _dedupe_list(parts)
+
+
+def _parse_small_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\d{1,4}", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except Exception:
+        return None
+
+
+def _build_llm_catalog_quality(catalog: dict[str, Any]) -> dict[str, Any]:
+    required_fields = ("titulo", "autor", "editorial", "anio", "idioma", "paginas")
+    missing = [field for field in required_fields if not catalog.get(field)]
+    isbn_ok = bool(catalog.get("isbn") and is_valid_isbn(catalog.get("isbn")))
+
+    base = 1.0 - (len(missing) / len(required_fields))
+    if not isbn_ok:
+        base -= 0.15
+    confidence = max(0.0, min(1.0, round(base, 3)))
+
+    flags = [f"missing_{field}" for field in missing]
+    if not isbn_ok:
+        flags.append("isbn_missing_or_invalid")
+
+    requires_review = bool("titulo" in missing or confidence < 0.55)
+    return {
+        "confidence": confidence,
+        "requires_manual_review": requires_review,
+        "missing_fields": missing,
+        "conflicts": {},
+        "review_flags": flags,
+        "source_coverage": {"sources_with_data": 0, "sources_total": len(SOURCE_ORDER)},
+    }
+
+
+def build_catalog_payload(book: dict[str, Any], *, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+    credits_text = str(book.get("credits_text") or "").strip()
     normalized = _normalize_sources(metadata)
 
-    title, title_source, title_alternatives = _resolve_scalar(normalized, "title")
-    subtitle, subtitle_source, subtitle_alternatives = _resolve_scalar(normalized, "subtitle")
-    publisher, publisher_source, publisher_alternatives = _resolve_scalar(normalized, "publisher")
-    year, year_source, year_alternatives = _resolve_scalar(normalized, "year")
-    pages, pages_source, pages_alternatives = _resolve_scalar(normalized, "pages")
-    authors, authors_source, authors_alternatives = _resolve_authors(normalized)
-    languages, languages_source, languages_alternatives = _resolve_languages(normalized)
+    google_clean, open_library_clean, isbndb_clean = _clean_sources_for_prompt(metadata)
+    prompt = (
+        f"SYSTEM:\n{CATALOG_SYSTEM_PROMPT}\n\n"
+        "USER:\n"
+        + CATALOG_HUMAN_PROMPT_TEMPLATE.format(
+            credits=credits_text or "",
+            google=json.dumps(google_clean, ensure_ascii=False, indent=2),
+            open_library=json.dumps(open_library_clean, ensure_ascii=False, indent=2),
+            isbndb=json.dumps(isbndb_clean, ensure_ascii=False, indent=2),
+        )
+    )
 
-    title_text = _as_text(title)
-    subtitle_text = _as_text(subtitle)
+    chosen_provider = _normalize_catalog_provider(provider)
+    chosen_model = _catalog_model_for_provider(chosen_provider, model)
+    raw = _call_catalog_llm(provider=chosen_provider, model=chosen_model, prompt=prompt)
 
-    title_full = title_text
-    if title_text and subtitle_text:
-        title_full = f"{title_text}: {subtitle_text}"
+    parsed = _extract_json_object(raw)
+    if not parsed:
+        raise ClientError("Catalog LLM returned invalid JSON")
 
-    isbn = clean_isbn(book.get("isbn") or metadata.get("isbn") or book.get("isbn_raw"))
-    isbn = isbn or None
+    isbn_candidate = clean_isbn(parsed.get("isbn") or book.get("isbn") or metadata.get("isbn") or book.get("isbn_raw"))
+    isbn = isbn_candidate if isbn_candidate else None
     isbn_ok = bool(isbn and is_valid_isbn(isbn))
 
-    keywords = _merge_subjects(normalized)
+    titulo = _as_text(parsed.get("titulo"))
+    subtitulo = _as_text(parsed.get("subtitulo"))
+    titulo_corto = _as_text(parsed.get("titulo_corto"))
+    titulo_completo = _as_text(parsed.get("titulo_completo"))
+    if not titulo_completo:
+        if titulo and subtitulo:
+            titulo_completo = f"{titulo}: {subtitulo}"
+        else:
+            titulo_completo = titulo
+
+    idioma_list = _dedupe_list([_language_to_es(item) or "" for item in _split_text_list(parsed.get("idioma")) if _language_to_es(item)])
+    if not idioma_list:
+        idioma_list = _resolve_languages(normalized)[0]
+
+    keywords = _split_text_list(parsed.get("palabras_clave"))
+    if not keywords:
+        keywords = _merge_subjects(normalized)
     if not keywords and not isbn_ok:
         keywords = ["NOISBN"]
 
-    sources_available = [
-        source for source in SOURCE_ORDER if _source_has_data(normalized.get(source, {}))
-    ]
-
-    catalog = {
+    payload = {
         "id": book.get("id"),
         "isbn": isbn,
-        "titulo": title_text,
-        "subtitulo": subtitle_text,
-        "titulo_completo": title_full,
-        "autor": authors,
-        "editorial": _as_text(publisher),
-        "anio": int(year) if isinstance(year, int) else None,
-        "idioma": languages,
-        "paginas": int(pages) if isinstance(pages, int) else None,
+        "titulo": titulo,
+        "titulo_corto": titulo_corto or titulo,
+        "subtitulo": subtitulo,
+        "titulo_completo": titulo_completo,
+        "autor": _extract_people(parsed.get("autor")),
+        "pais_autor": _split_text_list(parsed.get("pais_autor")),
+        "editorial": _publisher_to_commercial(parsed.get("editorial")),
+        "pais_publicacion": _as_text(parsed.get("pais_publicacion")),
+        "anio": _parse_year(parsed.get("anio")),
+        "idioma": idioma_list,
+        "edicion": _split_text_list(parsed.get("edicion")),
+        "numero_impresion": _as_text(parsed.get("numero_impresion")),
+        "coleccion": _as_text(parsed.get("coleccion")),
+        "numero_coleccion": _parse_small_int(parsed.get("numero_coleccion")),
+        "obra_completa": _as_text(parsed.get("obra_completa")),
+        "volumen": _as_text(parsed.get("volumen")),
+        "editor": _extract_people(parsed.get("editor")),
+        "traductor": _extract_people(parsed.get("traductor")),
+        "ilustrador": _extract_people(parsed.get("ilustrador")),
+        "introduccion_de": _extract_people(parsed.get("introduccion_de")),
+        "epilogo_de": _extract_people(parsed.get("epilogo_de")),
+        "fotografia_de": _extract_people(parsed.get("fotografia_de")),
+        "categoria": _as_text(parsed.get("categoria")),
+        "genero": _as_text(parsed.get("genero")),
+        "ilustraciones": _as_text(parsed.get("ilustraciones")),
+        "encuadernacion": _as_text(parsed.get("encuadernacion")),
+        "paginas": _parse_pages(parsed.get("paginas")),
         "palabras_clave": keywords,
-        "creditos_texto": str(book.get("credits_text") or "").strip(),
-        "fuentes": sources_available,
-        "provenance": {
-            "titulo": _provenance_entry(title_source, title_text, title_alternatives, "consensus_then_priority"),
-            "subtitulo": _provenance_entry(subtitle_source, subtitle_text, subtitle_alternatives, "consensus_then_priority"),
-            "autor": _provenance_entry(authors_source, authors, authors_alternatives, "priority_plus_merge"),
-            "editorial": _provenance_entry(publisher_source, _as_text(publisher), publisher_alternatives, "commercial_name_consensus"),
-            "anio": _provenance_entry(year_source, int(year) if isinstance(year, int) else None, year_alternatives, "consensus_then_priority"),
-            "idioma": _provenance_entry(languages_source, languages, languages_alternatives, "priority_plus_merge"),
-            "paginas": _provenance_entry(pages_source, int(pages) if isinstance(pages, int) else None, pages_alternatives, "consensus_then_priority"),
-        },
+        "creditos_texto": credits_text,
+        "fuentes": [source for source in SOURCE_ORDER if _source_has_data(normalized.get(source, {}))],
+        "catalog_provider": chosen_provider,
+        "catalog_model": chosen_model,
     }
 
-    initial_qa = _compute_quality(catalog, normalized, isbn_valid=isbn_ok)
-    catalog["qa"] = initial_qa
+    for dim_key, dim_value in _isbndb_dimensions_metric(metadata).items():
+        if dim_key not in payload or payload.get(dim_key) in (None, ""):
+            payload[dim_key] = dim_value
 
-    arbiter_info: dict[str, Any] = {
-        "enabled": bool(CATALOG_ARBITER_ENABLED),
-        "provider_requested": _normalize_arbiter_provider(CATALOG_ARBITER_PROVIDER),
-        "models": {
-            "openai": CATALOG_OPENAI_MODEL,
-            "ollama": CATALOG_OLLAMA_MODEL,
-        },
-        "applied": False,
-        "attempts": [],
-    }
-
-    if CATALOG_ARBITER_ENABLED and _catalog_needs_arbiter(initial_qa):
-        provider_requested = _normalize_arbiter_provider(CATALOG_ARBITER_PROVIDER)
-        provider_plan = _arbiter_provider_plan(provider_requested)
-        arbiter_info["provider_plan"] = provider_plan
-
-        prompt = _build_arbiter_prompt(catalog, initial_qa)
-        resolved_conflicts: set[str] = set()
-
-        for provider in provider_plan:
-            attempt: dict[str, Any] = {
-                "provider": provider,
-                "model": CATALOG_OPENAI_MODEL if provider == "openai" else CATALOG_OLLAMA_MODEL,
-            }
-            try:
-                raw = _call_arbiter(provider, prompt)
-                parsed = _extract_json_object(raw)
-                if not parsed:
-                    raise ClientError("Catalog arbiter returned invalid JSON")
-
-                validated = _validated_arbiter_values(parsed)
-                values = validated.get("values") if isinstance(validated.get("values"), dict) else {}
-                rationale = validated.get("rationale")
-                resolved = validated.get("resolved_conflicts")
-                if isinstance(resolved, set):
-                    resolved_conflicts = resolved
-
-                attempt["status"] = "ok"
-                attempt["applied_fields"] = sorted(values.keys())
-
-                if values:
-                    _apply_arbiter_values(catalog, values, provider=provider, rationale=rationale)
-                    arbiter_info["applied"] = True
-                    arbiter_info["provider"] = provider
-                    arbiter_info["rationale"] = rationale
-                    arbiter_info["resolved_conflicts"] = sorted(resolved_conflicts)
-                    arbiter_info["applied_fields"] = sorted(values.keys())
-                    arbiter_info["raw_output"] = parsed
-                    arbiter_info["attempts"].append(attempt)
-                    break
-
-            except Exception as exc:
-                attempt["status"] = "error"
-                attempt["error"] = str(exc)
-            arbiter_info["attempts"].append(attempt)
-
-        catalog["qa"] = _compute_quality(
-            catalog,
-            normalized,
-            isbn_valid=isbn_ok,
-            resolved_conflicts=set(arbiter_info.get("resolved_conflicts", [])),
-        )
-
-    if arbiter_info["enabled"]:
-        catalog["arbiter"] = arbiter_info
-
-    return catalog
+    payload["qa"] = _build_llm_catalog_quality(payload)
+    payload["raw_llm_output"] = raw
+    return payload
 
 
-def run_one(book_id: str, *, overwrite: bool = False) -> dict[str, Any]:
+def run_one(
+    book_id: str,
+    *,
+    overwrite: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     book = books.get_book(book_id)
     if book is None:
         return {"id": book_id, "status": "error", "error": "Book not found"}
@@ -984,7 +1166,7 @@ def run_one(book_id: str, *, overwrite: bool = False) -> dict[str, Any]:
         }
 
     try:
-        payload = build_catalog_payload(book)
+        payload = build_catalog_payload(book, provider=provider, model=model)
         title = str(payload.get("titulo") or "").strip()
         qa = payload.get("qa") if isinstance(payload.get("qa"), dict) else {}
         needs_review = bool(qa.get("requires_manual_review"))
@@ -1002,6 +1184,8 @@ def run_one(book_id: str, *, overwrite: bool = False) -> dict[str, Any]:
             "id": book_id,
             "status": status,
             "title": title,
+            "catalog_provider": payload.get("catalog_provider"),
+            "catalog_model": payload.get("catalog_model"),
             "confidence": qa.get("confidence"),
             "requires_manual_review": needs_review,
             "review_flags": qa.get("review_flags", []),

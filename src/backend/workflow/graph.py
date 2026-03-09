@@ -33,6 +33,8 @@ class WorkflowState(TypedDict, total=False):
     overwrite: bool
     ocr_provider: str | None
     ocr_model: str | None
+    catalog_provider: str | None
+    catalog_model: str | None
 
     max_attempts: int
 
@@ -252,7 +254,12 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
     book_id = state["book_id"]
     books.set_workflow_running(book_id, node="catalog", action=state.get("action"))
 
-    result = catalog.run_one(book_id, overwrite=bool(state.get("overwrite")))
+    result = catalog.run_one(
+        book_id,
+        overwrite=bool(state.get("overwrite")),
+        provider=state.get("catalog_provider"),
+        model=state.get("catalog_model"),
+    )
     if str(result.get("status") or "").strip().lower() == "error":
         return _with_failure(book_id, step="catalog", error=str(result.get("error") or "Catalog build failed"))
 

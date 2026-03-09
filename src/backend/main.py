@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 
 from .clients import ClientError, list_ollama_models
-from .config import OCR_PROVIDER, WORKFLOW_MAX_ATTEMPTS
+from .config import CATALOG_PROVIDER, OCR_PROVIDER, WORKFLOW_MAX_ATTEMPTS
 from .normalizers import clean_isbn, is_valid_isbn
 from .schemas.ingest import (
     IngestRequest,
@@ -12,6 +12,7 @@ from .schemas.ingest import (
     RunMetadataRequest,
     RunOcrRequest,
 )
+from .schemas.core_books import UpdateCoreBookRequest
 from .schemas.review import UpdateCatalogRequest, UpdateMetadataRequest, UpdateOcrRequest
 from .schemas.workflow import WorkflowMarkReviewRequest, WorkflowReviewRequest, WorkflowRunRequest
 from .services import books, export, ocr, workflow
@@ -79,6 +80,8 @@ def workflow_run(payload: WorkflowRunRequest):
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
+            catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
+            catalog_model=payload.catalog_model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -120,6 +123,8 @@ def workflow_review_action(book_id: str, payload: WorkflowReviewRequest):
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
+            catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
+            catalog_model=payload.catalog_model,
         )
         return {"ok": True, "result": result}
     except ValueError as exc:
@@ -176,6 +181,8 @@ def run_metadata(payload: RunMetadataRequest):
             stop_after="metadata",
             overwrite=payload.overwrite,
             max_attempts=WORKFLOW_MAX_ATTEMPTS,
+            catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
+            catalog_model=payload.catalog_model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -341,6 +348,52 @@ def update_book_catalog(book_id: str, payload: UpdateCatalogRequest):
 
     books.update_catalog(book_id, catalog=payload.catalog, status="manual", error=None)
     return {"ok": True}
+
+
+@app.post("/core-books/bootstrap")
+def bootstrap_core_books(block: str | None = None, module: str | None = None, limit: int = 2000):
+    if limit < 1 or limit > 50000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
+    try:
+        return books.bootstrap_core_books(block=block, module=module, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/core-books/options")
+def core_books_options():
+    return {"allowed_values": books.get_books_allowed_values()}
+
+
+@app.get("/core-books")
+def list_core_books(limit: int = 500, block: str | None = None, module: str | None = None):
+    if limit < 1 or limit > 50000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
+    try:
+        return books.list_core_books(limit=limit, block=block, module=module)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/core-books/{book_id}")
+def get_core_book(book_id: str, bootstrap: bool = True):
+    item = books.get_core_book(book_id, bootstrap=bootstrap)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Core book not found")
+    return item
+
+
+@app.put("/core-books/{book_id}")
+def update_core_book(book_id: str, payload: UpdateCoreBookRequest):
+    try:
+        item = books.update_core_book(
+            book_id,
+            fields=payload.fields,
+            recompute_description=bool(payload.recompute_description),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "book": item}
 
 
 @app.get("/export/books/tsv")

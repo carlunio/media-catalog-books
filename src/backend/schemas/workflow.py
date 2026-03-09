@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 WorkflowStage = Literal["ocr", "metadata", "catalog", "cover"]
 OcrProvider = Literal["auto", "openai", "ollama", "none"]
+CatalogProvider = Literal["auto", "openai", "ollama", "none"]
 WorkflowReviewAction = Literal[
     "approve",
     "retry_from_ocr",
@@ -25,6 +26,8 @@ class WorkflowRunRequest(BaseModel):
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
+    catalog_provider: CatalogProvider | None = None
+    catalog_model: str | None = None
 
 
 class WorkflowReviewRequest(BaseModel):
@@ -32,6 +35,8 @@ class WorkflowReviewRequest(BaseModel):
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
+    catalog_provider: CatalogProvider | None = None
+    catalog_model: str | None = None
 
 
 class WorkflowMarkReviewRequest(BaseModel):

@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 OcrProvider = Literal["auto", "openai", "ollama", "none"]
+CatalogProvider = Literal["auto", "openai", "ollama", "none"]
 
 
 class IngestRequest(BaseModel):
@@ -39,6 +40,8 @@ class RunCatalogRequest(BaseModel):
     module: str | None = None
     limit: int = Field(default=20, ge=1, le=5000)
     overwrite: bool = False
+    catalog_provider: CatalogProvider | None = None
+    catalog_model: str | None = None
 
 
 class RunCoverRequest(BaseModel):

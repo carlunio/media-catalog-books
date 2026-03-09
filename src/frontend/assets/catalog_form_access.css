@@ -1,0 +1,70 @@
+.access-titlebar {
+    background: #8fa8c6;
+    border: 1px solid #738aa3;
+    border-radius: 3px;
+    color: #0f2f57;
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1.15;
+    margin-bottom: 0.75rem;
+    padding: 0.55rem 0.8rem;
+}
+
+.access-panel {
+    background: #d2dae7;
+    border: 1px solid #8f9db0;
+    border-radius: 4px;
+    margin-top: 0.4rem;
+    padding: 1rem 1rem 0.8rem;
+}
+
+.access-section {
+    background: #a7b6cb;
+    border: 1px solid #7f8da2;
+    border-radius: 2px;
+    color: #1b3958;
+    font-size: 0.95rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    margin: 0.65rem 0 0.35rem;
+    padding: 0.35rem 0.5rem;
+}
+
+.access-label {
+    border: 1px solid #7f8a98;
+    border-radius: 2px;
+    color: #2b415b;
+    font-size: 0.98rem;
+    font-weight: 700;
+    line-height: 1.1rem;
+    margin-bottom: 0.3rem;
+    padding: 0.45rem 0.55rem;
+}
+
+.lbl-blue { background: #9fb2cc; }
+.lbl-lilac { background: #b8adc9; }
+.lbl-orange { background: #e5bf9e; }
+.lbl-beige { background: #e4d2c0; }
+.lbl-green { background: #bccaa0; }
+.lbl-yellow { background: #ece08a; }
+.lbl-cyan { background: #9ed1de; }
+.lbl-purple { background: #b8adc9; }
+.lbl-steel { background: #8ea3bd; }
+
+.desc-box {
+    background: #f6f8fb;
+    border: 1px solid #7f8a98;
+    border-radius: 3px;
+    padding: 0.5rem;
+}
+
+div[data-testid="stForm"] div[data-baseweb="select"] > div,
+div[data-testid="stForm"] input,
+div[data-testid="stForm"] textarea {
+    border-color: #848e9c;
+}
+
+div[data-testid="stForm"] button[kind="primary"] {
+    background: linear-gradient(180deg, #2578a0, #0e5b86);
+    border: 1px solid #0d5176;
+}

@@ -47,11 +47,17 @@ Ademas, el workflow se ejecuta siempre en scope de modulo (`block + module`).
 
 ## Persistencia DuckDB
 
-Las tablas principales son:
+Las tablas principales actuales son:
 
-- `books`: estado operativo por libro y columnas de control de pipeline/workflow
-- `book_images`: rutas de imagenes por libro (una fila por imagen)
-- `book_payload_fields`: payloads intermedios normalizados en filas (`metadata`, `catalog`, `ocr_trace`)
+- `book_items`: estado operativo por libro y columnas de control de pipeline/workflow
+- `book_image_files`: imagenes por libro (una fila por imagen, sin ruta absoluta)
+- `book_ocr_data`: resultado OCR e ISBN derivados
+- `book_bibliographic_sources`: fichas crudas por proveedor (`google`, `isbndb`, `openlibrary`)
+
+Los estados de workflow y de etapas (OCR/metadata/catalog/cover) se centralizan en `book_items`.
+
+La tabla final `books` todavia no se crea en esta fase.
+Queda reservada para el volcado final de catalogacion consolidada (a partir de fichas + OCR de creditos).
 
 ## Estructura
 
@@ -88,6 +94,7 @@ Ademas, `make dev` verifica/crea `.venv` e instala dependencias si faltan.
 ## Variables de entorno clave
 
 - `DB_PATH`: ruta DuckDB
+- `FRONTEND_THEME_CSS`: ruta CSS para UI (`theme.css` o `theme_legacy.css` en `src/frontend/assets`, o ruta absoluta)
 - `COVERS_DIR`: carpeta de entrada de imagenes
 - `COVERS_OUTPUT_DIR`: carpeta de portadas descargadas
 - `OCR_OUTPUT_DIR`: carpeta opcional con OCR preexistente (`<book_id>.txt`)
@@ -108,6 +115,18 @@ Ademas, `make dev` verifica/crea `.venv` e instala dependencias si faltan.
 - `CATALOG_ARBITER_MIN_CONFIDENCE`: umbral para disparar arbitraje
 - `ISBNDB_API_KEY`: clave para ISBNdb
 - `WORKFLOW_MAX_ATTEMPTS`: reintentos automaticos por item
+
+## Temas visuales
+
+Puedes alternar el tema de Streamlit cambiando solo la ruta en `.env`:
+
+```bash
+# tema nuevo
+FRONTEND_THEME_CSS=theme.css
+
+# tema inspirado en book_catalog_v0.3
+FRONTEND_THEME_CSS=theme_legacy.css
+```
 
 ## Resolucion catalografica
 
