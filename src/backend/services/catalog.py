@@ -853,7 +853,7 @@ CATALOG_HUMAN_PROMPT_TEMPLATE = (
     "3) Ficha Open Library:\n{open_library}\n\n"
     "4) Ficha ISBNdb:\n{isbndb}\n\n"
     "Respuesta JSON esperada:\n"
-    "{\n"
+    "{{\n"
     '  "isbn": str|null,\n'
     '  "titulo": str|null,\n'
     '  "titulo_corto": str|null,\n'
@@ -883,7 +883,7 @@ CATALOG_HUMAN_PROMPT_TEMPLATE = (
     '  "encuadernacion": str|null,\n'
     '  "paginas": int|null,\n'
     '  "palabras_clave": [str]|null\n'
-    "}"
+    "}}"
 )
 
 GOOGLE_KEYS_TO_DROP = {
