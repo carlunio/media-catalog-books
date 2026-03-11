@@ -1745,14 +1745,10 @@ def books_for_stage(
         params.append(scope_module)
 
     if not overwrite:
-        if normalized_stage == "ocr":
-            where.append("COALESCE(ocr_status, '') NOT IN ('processed', 'manual', 'skipped')")
-        elif normalized_stage == "metadata":
-            where.append("COALESCE(metadata_status, '') NOT IN ('fetched', 'partial', 'manual', 'skipped')")
-        elif normalized_stage == "catalog":
-            where.append("COALESCE(catalog_status, '') NOT IN ('built', 'partial', 'manual')")
-        elif normalized_stage == "cover":
-            where.append("COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')")
+        # Strict mode for batched workflow runs:
+        # only books exactly in the requested orchestration stage are eligible.
+        where.append("pipeline_stage = ?")
+        params.append(normalized_stage)
 
     sql = "SELECT id FROM book_items"
     if where:
@@ -1765,6 +1761,43 @@ def books_for_stage(
         rows = [str(row[0]) for row in cur.fetchall()]
 
     return [{"id": book_id} for book_id in rows]
+
+
+def count_books_for_stage(
+    *,
+    stage: str,
+    overwrite: bool,
+    block: str | None = None,
+    module: str | None = None,
+) -> int:
+    normalized_stage = str(stage or "").strip().lower()
+    if normalized_stage not in STAGES:
+        raise ValueError(f"Invalid stage: {stage}")
+
+    scope_block, scope_module = resolve_scope(block, module, require=False)
+
+    where = ["workflow_needs_review = FALSE"]
+    params: list[Any] = []
+
+    if scope_block:
+        where.append("block = ?")
+        params.append(scope_block)
+    if scope_module:
+        where.append("module = ?")
+        params.append(scope_module)
+
+    if not overwrite:
+        where.append("pipeline_stage = ?")
+        params.append(normalized_stage)
+
+    sql = "SELECT COUNT(*) FROM book_items"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+
+    with get_connection() as con:
+        row = con.execute(sql, params).fetchone()
+
+    return int(row[0]) if row else 0
 
 
 def book_ids_for_workflow(

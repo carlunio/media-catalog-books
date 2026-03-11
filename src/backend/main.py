@@ -111,6 +111,24 @@ def workflow_snapshot(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/workflow/eligible")
+def workflow_eligible(
+    start_stage: str = "ocr",
+    overwrite: bool = False,
+    block: str | None = None,
+    module: str | None = None,
+):
+    try:
+        return workflow.eligible_count(
+            start_stage=start_stage,
+            overwrite=overwrite,
+            block=block,
+            module=module,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/workflow/review/{book_id}")
 def workflow_review_action(book_id: str, payload: WorkflowReviewRequest):
     if books.get_book(book_id) is None:

@@ -263,6 +263,25 @@ def run_batch(
                 f"(book scope is {target_block}/{target_module})"
             )
 
+        if not overwrite:
+            current_stage = str(target_book.get("pipeline_stage") or "").strip().lower()
+            if current_stage != stage:
+                return {
+                    "scope": {"block": scope_block, "module": scope_module},
+                    "requested": 1,
+                    "processed": 1,
+                    "items": [
+                        {
+                            "id": book_id,
+                            "status": "skipped",
+                            "reason": (
+                                f"Book stage '{current_stage or 'unknown'}' does not match "
+                                f"start_stage '{stage}' with overwrite disabled"
+                            ),
+                        }
+                    ],
+                }
+
         targets = [book_id]
     else:
         targets = books.book_ids_for_workflow(
@@ -295,6 +314,29 @@ def run_batch(
         "requested": len(targets),
         "processed": len(items),
         "items": items,
+    }
+
+
+def eligible_count(
+    *,
+    start_stage: str = "ocr",
+    overwrite: bool = False,
+    block: str | None = None,
+    module: str | None = None,
+) -> dict[str, Any]:
+    stage = _normalize_stage(start_stage, default="ocr")
+    scope_block, scope_module = books.resolve_scope(block, module, require=True)
+    eligible = books.count_books_for_stage(
+        stage=stage,
+        overwrite=overwrite,
+        block=scope_block,
+        module=scope_module,
+    )
+    return {
+        "scope": {"block": scope_block, "module": scope_module},
+        "start_stage": stage,
+        "overwrite": bool(overwrite),
+        "eligible": int(eligible),
     }
 
 

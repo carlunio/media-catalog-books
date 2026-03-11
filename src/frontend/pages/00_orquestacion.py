@@ -61,10 +61,44 @@ with col3:
     stop_options = ["(sin limite)"] + list(WORKFLOW_STAGES)
     stop_after = st.selectbox("Parar en", stop_options, index=0)
 with col4:
-    limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
+    st.caption("El limite de lote depende de la etapa y overwrite")
 
 overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
 max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
+
+eligible_limit: int | None = None
+if not overwrite:
+    try:
+        eligible_payload = api_get(
+            "/workflow/eligible",
+            params={
+                "start_stage": start_stage,
+                "overwrite": "false",
+                **scope_params(scope_block, scope_module),
+            },
+            timeout=10.0,
+        )
+        eligible_limit = int(eligible_payload.get("eligible", 0))
+    except Exception as exc:
+        st.warning(f"No se pudo calcular elegibles para el lote: {exc}")
+        eligible_limit = None
+
+if overwrite:
+    limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
+else:
+    if eligible_limit is None:
+        limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
+    elif eligible_limit <= 0:
+        st.info(f"No hay items elegibles en etapa '{start_stage}' para el modulo seleccionado.")
+        limit = 0
+    else:
+        st.caption(f"Elegibles exactos para '{start_stage}' sin overwrite: {eligible_limit}")
+        limit = st.number_input(
+            "Lote",
+            min_value=1,
+            max_value=int(eligible_limit),
+            value=min(20, int(eligible_limit)),
+        )
 
 col_provider, col_model = st.columns([1, 2])
 default_ocr_ollama_model = "glm-ocr:latest"
@@ -111,6 +145,10 @@ with cat_col_b:
         )
 
 if st.button("Ejecutar workflow", type="primary"):
+    if not overwrite and int(limit) <= 0:
+        st.warning("No hay items elegibles para ejecutar con esa etapa inicial y overwrite desactivado.")
+        st.stop()
+
     payload = {
         "book_id": selected_id.strip() or None,
         "block": scope_block,
