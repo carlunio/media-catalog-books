@@ -306,6 +306,10 @@ left_fields_flat = _flatten_fields(LEFT_GROUPS)
 right_fields_flat = _flatten_fields(RIGHT_GROUPS)
 all_fields = left_fields_flat + [field for field in right_fields_flat if field not in left_fields_flat]
 _sync_defaults(selected_id, book, all_fields)
+description_field = "descripcion"
+description_key = _input_key(selected_id, description_field)
+if description_key not in st.session_state:
+    st.session_state[description_key] = _value_or_empty(book.get(description_field))
 
 st.markdown("<div class='access-panel'>", unsafe_allow_html=True)
 with st.form(f"core_catalog_form_{selected_id}"):
@@ -328,32 +332,44 @@ with st.form(f"core_catalog_form_{selected_id}"):
     st.markdown("<div class='access-section'>Descripción</div>", unsafe_allow_html=True)
     st.markdown("<div class='desc-box'>", unsafe_allow_html=True)
     st.text_area(
-        "Descripción actual",
-        value=str(book.get("descripcion") or ""),
+        "Descripción",
+        key=description_key,
         height=220,
-        disabled=True,
         label_visibility="collapsed",
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    save = st.form_submit_button("Guardar cambios y actualizar descripción", type="primary", use_container_width=True)
+    action_col_save, action_col_regen = st.columns(2, gap="small")
+    with action_col_save:
+        save = st.form_submit_button("Guardar cambios", type="primary", use_container_width=True)
+    with action_col_regen:
+        regenerate_description = st.form_submit_button(
+            "Regenerar descripción automática",
+            use_container_width=True,
+        )
 
-if save:
+if save or regenerate_description:
     payload_fields: dict[str, Any] = {}
     for field in all_fields:
         payload_fields[field] = st.session_state.get(_input_key(selected_id, field))
+    payload_fields[description_field] = st.session_state.get(description_key)
+    should_recompute_description = bool(regenerate_description)
 
     try:
         result = api_put(
             f"/core-books/{selected_id}",
-            json={"fields": payload_fields, "recompute_description": True},
+            json={"fields": payload_fields, "recompute_description": should_recompute_description},
             timeout=60.0,
         )
         item = result.get("book") if isinstance(result, dict) else {}
         if isinstance(item, dict):
             for field in all_fields:
                 st.session_state[_input_key(selected_id, field)] = _value_or_empty(item.get(field))
-        st.success("Registro guardado y descripción actualizada")
+            st.session_state[description_key] = _value_or_empty(item.get(description_field))
+        if should_recompute_description:
+            st.success("Registro guardado y descripción regenerada")
+        else:
+            st.success("Registro guardado")
         st.rerun()
     except Exception as exc:
         st.error(f"No se pudo guardar el formulario: {exc}")

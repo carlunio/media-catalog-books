@@ -1962,62 +1962,75 @@ def _format_volume(value: Any, *, with_collection_title: bool) -> str:
     return f"Volumen {text}"
 
 
+def _ensure_sentence(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return ""
+    if normalized[-1] in ".!?":
+        return normalized
+    return f"{normalized}."
+
+
+def _comma_join_unique_values(value: Any) -> str:
+    return ", ".join(_split_unique_values(value))
+
+
 def build_core_description(record: dict[str, Any]) -> str:
-    author_country_items = _split_unique_values(record.get("pais_autor"))
-    author_countries = ", ".join(author_country_items)
-    author_country_keys = {item.lower() for item in author_country_items}
-    publication_country = _as_clean_text(record.get("pais_publicacion"))
-
     parts: list[str] = []
+    author_country_items = _split_unique_values(record.get("pais_autor"))
+    author_country_keys = {item.lower() for item in author_country_items}
 
-    categoria = _as_clean_text(record.get("categoria"))
-    if categoria:
-        parts.append(f"{categoria}.")
+    def add_text(value: Any, *, prefix: str = "") -> None:
+        text = _as_clean_text(value)
+        if not text:
+            return
+        sentence = _ensure_sentence(f"{prefix}{text}")
+        if sentence:
+            parts.append(sentence)
 
-    idioma = _as_clean_text(record.get("idioma"))
-    if idioma and idioma.lower() != "español":
-        if ";" in idioma:
-            parts.append(f"Idiomas: {idioma.replace('; ', ', ')}.")
-        else:
-            parts.append(f"Idioma: {idioma}.")
+    def add_sentence(sentence: str) -> None:
+        text = _ensure_sentence(sentence)
+        if text:
+            parts.append(text)
 
-    genero = _as_clean_text(record.get("genero"))
-    if genero:
-        parts.append(f"{genero}.")
+    add_text(record.get("categoria"))
 
-    if author_countries:
-        parts.append(f"{author_countries}.")
+    idiomas = _split_unique_values(record.get("idioma"))
+    if idiomas:
+        if len(idiomas) == 1 and idiomas[0].lower() != "español":
+            add_sentence(f"Idioma: {idiomas[0]}")
+        elif len(idiomas) > 1:
+            add_sentence(f"Idiomas: {', '.join(idiomas)}")
 
+    add_text(record.get("genero"))
+
+    if author_country_items:
+        add_sentence(", ".join(author_country_items))
+
+    publication_country = _as_clean_text(record.get("pais_publicacion"))
     if publication_country and publication_country.lower() not in author_country_keys:
-        parts.append(f"{publication_country}.")
+        add_sentence(publication_country)
 
     editor = _format_names(record.get("editor"))
     if editor:
-        parts.append(f"Edición a cargo de {editor}.")
+        add_sentence(f"Edición a cargo de {editor}")
 
     coleccion = _as_clean_text(record.get("coleccion"))
     numero_coleccion = _as_clean_text(record.get("numero_coleccion"))
     if coleccion:
         if numero_coleccion:
-            parts.append(f"{coleccion}, nº {numero_coleccion}.")
+            add_sentence(f"{coleccion}, nº {numero_coleccion}")
         else:
-            parts.append(f"{coleccion}.")
+            add_sentence(coleccion)
 
-    editorial = _as_clean_text(record.get("editorial"))
-    if editorial:
-        parts.append(f"{editorial}.")
+    add_text(record.get("editorial"))
+    add_text(record.get("anio"))
 
-    anio = _as_clean_text(record.get("anio"))
-    if anio:
-        parts.append(f"{anio}.")
-
-    edicion = _as_clean_text(record.get("edicion"))
+    edicion = _comma_join_unique_values(record.get("edicion"))
     if edicion:
-        parts.append(f"{edicion.replace('; ', ', ')}.")
+        add_sentence(edicion)
 
-    numero_impresion = _as_clean_text(record.get("numero_impresion"))
-    if numero_impresion:
-        parts.append(f"{numero_impresion}.")
+    add_text(record.get("numero_impresion"))
 
     obra_completa = _as_clean_text(record.get("obra_completa"))
     volumen = _as_clean_text(record.get("volumen"))
@@ -2025,66 +2038,47 @@ def build_core_description(record: dict[str, Any]) -> str:
     if obra_completa and obra_completa != titulo:
         volume_text = _format_volume(volumen, with_collection_title=True) if volumen else ""
         if volume_text:
-            parts.append(f"{obra_completa}, {volume_text}.")
+            add_sentence(f"{obra_completa}, {volume_text}")
         else:
-            parts.append(f"{obra_completa}.")
+            add_sentence(obra_completa)
     elif volumen:
-        parts.append(f"{_format_volume(volumen, with_collection_title=False)}.")
+        add_sentence(_format_volume(volumen, with_collection_title=False))
 
     paginas = _as_clean_text(record.get("paginas"))
     if paginas:
-        parts.append(f"{paginas} págs.")
+        add_sentence(f"{paginas} págs.")
 
-    dimensiones = _as_clean_text(record.get("dimensiones"))
-    if dimensiones:
-        parts.append(f"{dimensiones}.")
-
+    add_text(record.get("dimensiones"))
     peso = _as_clean_text(record.get("peso"))
     if peso:
-        parts.append(f"{peso} g.")
+        add_sentence(f"{peso} g.")
 
-    detalle_encuadernacion = _as_clean_text(record.get("detalle_encuadernacion"))
-    if detalle_encuadernacion:
-        parts.append(f"{detalle_encuadernacion}.")
-
-    desperfectos = _as_clean_text(record.get("desperfectos"))
-    if desperfectos:
-        parts.append(f"{desperfectos}.")
+    add_text(record.get("detalle_encuadernacion"))
+    add_text(record.get("desperfectos"))
 
     introduccion = _format_names(record.get("introduccion_de"))
     if introduccion:
-        parts.append(f"Introducción de {introduccion}.")
+        add_sentence(f"Introducción de {introduccion}")
 
     epilogo = _format_names(record.get("epilogo_de"))
     if epilogo:
-        parts.append(f"Epílogo de {epilogo}.")
+        add_sentence(f"Epílogo de {epilogo}")
 
     traductor = _format_names(record.get("traductor"))
     if traductor:
-        parts.append(f"Traducción de {traductor}.")
+        add_sentence(f"Traducción de {traductor}")
 
-    ilustraciones = _as_clean_text(record.get("ilustraciones"))
-    if ilustraciones:
-        parts.append(f"{ilustraciones}.")
+    add_text(record.get("ilustraciones"))
 
     fotografia = _format_names(record.get("fotografia_de"))
     if fotografia:
-        parts.append(f"Fotografía de {fotografia}.")
+        add_sentence(f"Fotografía de {fotografia}")
 
     ilustrador = _format_names(record.get("ilustrador"))
     if ilustrador:
-        parts.append(f"Ilustraciones de {ilustrador}.")
+        add_sentence(f"Ilustraciones de {ilustrador}")
 
-    description = " ".join(parts).strip()
-    book_id = _as_clean_text(record.get("id"))
-    if book_id:
-        suffix = f"Nº de ref. del artículo: {book_id}"
-        if description:
-            description = f"{description}\n\n{suffix}"
-        else:
-            description = suffix
-
-    return description
+    return " ".join(parts).strip()
 
 
 def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> dict[str, Any]:
