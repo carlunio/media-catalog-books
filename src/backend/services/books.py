@@ -129,7 +129,6 @@ CORE_BOOKS_COLUMNS: tuple[str, ...] = (
     "estado_cubierta",
     "desperfectos",
     "dedicatorias",
-    "dimensiones",
     "alto",
     "ancho",
     "fondo",
@@ -371,7 +370,6 @@ def _create_books_core_schema(con: Any) -> None:
             estado_cubierta VARCHAR,
             desperfectos VARCHAR,
             dedicatorias VARCHAR,
-            dimensiones VARCHAR,
             alto SMALLINT DEFAULT 0,
             ancho INTEGER DEFAULT 0,
             fondo INTEGER DEFAULT 0,
@@ -394,54 +392,15 @@ def _create_books_core_schema(con: Any) -> None:
     con.execute("CREATE INDEX IF NOT EXISTS idx_books_idioma ON books(idioma)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_books_palabras_clave ON books(palabras_clave)")
 
-    con.execute("CREATE SCHEMA IF NOT EXISTS ref")
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ref.iso_639_3 (
-            id VARCHAR,
-            part2b VARCHAR,
-            part2t VARCHAR,
-            part1 VARCHAR,
-            scope VARCHAR,
-            language_yype VARCHAR,
-            ref_name VARCHAR,
-            comment VARCHAR,
-            spa_name VARCHAR
-        )
-        """
-    )
+    # Keep schema aligned with current model (dimensiones removed in favor of alto/ancho/fondo).
+    try:
+        con.execute("ALTER TABLE books DROP COLUMN IF EXISTS dimensiones")
+    except Exception:
+        pass
 
-    # One-time migration from legacy main.iso_639_3 -> ref.iso_639_3.
-    main_iso_exists = bool(
-        con.execute(
-            """
-            SELECT COUNT(*) > 0
-            FROM information_schema.tables
-            WHERE table_schema = 'main' AND table_name = 'iso_639_3'
-            """
-        ).fetchone()[0]
-    )
-    if main_iso_exists:
-        legacy_columns = {
-            str(row[0]).strip().lower()
-            for row in con.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'main' AND table_name = 'iso_639_3'
-                """
-            ).fetchall()
-        }
-        spa_col = "spa_name" if "spa_name" in legacy_columns else ("nombre_spa" if "nombre_spa" in legacy_columns else "NULL")
-        con.execute(
-            f"""
-            INSERT INTO ref.iso_639_3 (id, part2b, part2t, part1, scope, language_yype, ref_name, comment, spa_name)
-            SELECT id, part2b, part2t, part1, scope, language_yype, ref_name, comment, {spa_col}
-            FROM main.iso_639_3
-            WHERE NOT EXISTS (SELECT 1 FROM ref.iso_639_3)
-            """
-        )
-        con.execute("DROP TABLE IF EXISTS main.iso_639_3")
+    # ISO helper table is no longer used; keep schema clean.
+    con.execute("DROP TABLE IF EXISTS ref.iso_639_3")
+    con.execute("DROP TABLE IF EXISTS main.iso_639_3")
 
     con.execute(
         """
@@ -455,11 +414,50 @@ def _create_books_core_schema(con: Any) -> None:
         """
     )
     con.execute("ALTER TABLE book_field_allowed_values ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0")
-    con.execute("DELETE FROM book_field_allowed_values WHERE table_name = 'books'")
-    con.executemany(
-        "INSERT INTO book_field_allowed_values (table_name, field_name, field_value, sort_order) VALUES (?, ?, ?, ?)",
-        [("books", field_name, field_value, index) for index, (field_name, field_value) in enumerate(BOOK_ALLOWED_VALUES)],
-    )
+    target_rows = [("books", field_name, field_value, index) for index, (field_name, field_value) in enumerate(BOOK_ALLOWED_VALUES)]
+    target_keys = {(row[1], row[2]) for row in target_rows}
+
+    current_rows = con.execute(
+        """
+        SELECT field_name, field_value, sort_order
+        FROM book_field_allowed_values
+        WHERE table_name = 'books'
+        """
+    ).fetchall()
+    current_map = {
+        (str(row[0] or "").strip(), str(row[1] or "").strip()): int(row[2] or 0)
+        for row in current_rows
+        if str(row[0] or "").strip() and str(row[1] or "").strip()
+    }
+
+    insert_rows = [row for row in target_rows if (row[1], row[2]) not in current_map]
+    if insert_rows:
+        con.executemany(
+            "INSERT INTO book_field_allowed_values (table_name, field_name, field_value, sort_order) VALUES (?, ?, ?, ?)",
+            insert_rows,
+        )
+
+    update_rows = [
+        (row[3], row[0], row[1], row[2])
+        for row in target_rows
+        if current_map.get((row[1], row[2])) is not None and current_map.get((row[1], row[2])) != row[3]
+    ]
+    if update_rows:
+        con.executemany(
+            """
+            UPDATE book_field_allowed_values
+            SET sort_order = ?
+            WHERE table_name = ? AND field_name = ? AND field_value = ?
+            """,
+            update_rows,
+        )
+
+    delete_rows = [("books", field_name, field_value) for (field_name, field_value) in current_map.keys() if (field_name, field_value) not in target_keys]
+    if delete_rows:
+        con.executemany(
+            "DELETE FROM book_field_allowed_values WHERE table_name = ? AND field_name = ? AND field_value = ?",
+            delete_rows,
+        )
 
     con.execute(
         """
@@ -472,12 +470,7 @@ def _create_books_core_schema(con: Any) -> None:
             b.isbn AS isbn,
             CASE
                 WHEN strpos(COALESCE(b.idioma, ''), ';') > 0 THEN 'MUL'
-                ELSE (
-                    SELECT upper(i.id)
-                    FROM ref.iso_639_3 i
-                    WHERE i.spa_name = b.idioma
-                    LIMIT 1
-                )
+                ELSE upper(idioma_es_a_iso639_3(b.idioma))
             END AS language,
             b.tipo_articulo AS producttype,
             b.encuadernacion AS bindingtext,
@@ -1824,17 +1817,29 @@ def _json_safe_db_value(value: Any) -> Any:
     return value
 
 
+_NULL_TEXT_SENTINELS = {"none", "null", "nan"}
+
+
+def _normalize_nullable_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() in _NULL_TEXT_SENTINELS:
+        return None
+    return text
+
+
 def _as_clean_text(value: Any) -> str | None:
-    text = str(value or "").strip()
-    return text or None
+    return _normalize_nullable_text(value)
 
 
 def _list_to_text(value: Any, *, separator: str = "; ") -> str | None:
     if isinstance(value, list):
-        items = [str(item).strip() for item in value if str(item).strip()]
+        items = [item for item in (_normalize_nullable_text(item) for item in value) if item]
         return separator.join(items) if items else None
-    text = str(value or "").strip()
-    return text or None
+    return _normalize_nullable_text(value)
 
 
 def _first_image_filename(book_id: str) -> str | None:
@@ -1887,7 +1892,7 @@ def _normalize_core_input_value(field: str, value: Any) -> Any:
 
     if field in CORE_BOOKS_INT_FIELDS:
         text = str(value).strip()
-        if text == "":
+        if (not text) or (text.lower() in _NULL_TEXT_SENTINELS):
             return None
         try:
             return int(float(text))
@@ -1897,32 +1902,82 @@ def _normalize_core_input_value(field: str, value: Any) -> Any:
     if field in CORE_BOOKS_DECIMAL_FIELDS:
         text = str(value).strip().replace(",", ".")
         text = text.replace("€", "").strip()
-        if text == "":
+        if (not text) or (text.lower() in _NULL_TEXT_SENTINELS):
             return None
         try:
             return round(float(text), 2)
         except (TypeError, ValueError):
             raise ValueError(f"Invalid decimal value for {field}: {value}") from None
 
-    text = str(value).strip()
-    return text or None
+    return _normalize_nullable_text(value)
+
+
+def _core_values_equal(current: Any, candidate: Any) -> bool:
+    if current is None and candidate is None:
+        return True
+    if isinstance(current, Decimal):
+        current = float(current)
+    if isinstance(candidate, Decimal):
+        candidate = float(candidate)
+    if isinstance(current, (int, float)) and isinstance(candidate, (int, float)):
+        return float(current) == float(candidate)
+    return current == candidate
 
 
 def _split_unique_values(value: Any) -> list[str]:
-    text = str(value or "").strip()
+    text = _normalize_nullable_text(value) or ""
     if not text:
         return []
     chunks = re.split(r"[;\n]+", text)
     output: list[str] = []
     seen: set[str] = set()
     for chunk in chunks:
-        item = str(chunk).strip()
+        item = _normalize_nullable_text(chunk) or ""
         key = item.lower()
         if not item or key in seen:
             continue
         seen.add(key)
         output.append(item)
     return output
+
+
+def _is_noisbn_keyword(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+    return normalized == "noisbn"
+
+
+def _normalize_keywords_for_isbn(value: Any, *, isbn: Any) -> str | None:
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def _push(candidate: Any) -> None:
+        text = _normalize_nullable_text(candidate)
+        if not text:
+            return
+        for piece in re.split(r"[,;\n]+", text):
+            item = _normalize_nullable_text(piece)
+            if not item:
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append(item)
+
+    if isinstance(value, list):
+        for raw in value:
+            _push(raw)
+    else:
+        _push(value)
+
+    has_isbn = bool(_normalize_nullable_text(isbn))
+    if has_isbn:
+        tokens = [item for item in tokens if not _is_noisbn_keyword(item)]
+    else:
+        if not any(_is_noisbn_keyword(item) for item in tokens):
+            tokens.append("NOISBN")
+
+    return ", ".join(tokens) if tokens else None
 
 
 def _format_names(value: Any) -> str:
@@ -1951,15 +2006,27 @@ def _format_names(value: Any) -> str:
 
 
 def _format_volume(value: Any, *, with_collection_title: bool) -> str:
-    text = str(value or "").strip()
+    text = _as_clean_text(value) or ""
     if not text:
         return ""
-    lowered = text.lower()
-    if "vol" in lowered or "tomo" in lowered:
-        return text
+
+    # Access VBA parity:
+    # - "OBRA COMPLETA" is returned as-is (title case).
+    # - Prefix is vol./vols. when obra is present, Vol./Vols. otherwise.
+    # - If value looks like range/list (space, comma, hyphen), use plural prefix.
+    if text.upper() == "OBRA COMPLETA":
+        return "Obra completa"
+
     if with_collection_title:
-        return f"vol. {text}"
-    return f"Volumen {text}"
+        singular_prefix = "vol. "
+        plural_prefix = "vols. "
+    else:
+        singular_prefix = "Vol. "
+        plural_prefix = "Vols. "
+
+    if (" " in text) or ("," in text) or ("-" in text):
+        return f"{plural_prefix}{text}"
+    return f"{singular_prefix}{text}"
 
 
 def _ensure_sentence(text: str) -> str:
@@ -2048,7 +2115,25 @@ def build_core_description(record: dict[str, Any]) -> str:
     if paginas:
         add_sentence(f"{paginas} págs.")
 
-    add_text(record.get("dimensiones"))
+    def _format_dimension_value(value: Any) -> str | None:
+        text = _as_clean_text(value)
+        if not text:
+            return None
+        try:
+            number = float(str(text).replace(",", "."))
+        except ValueError:
+            return None
+        if number <= 0:
+            return None
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:g}"
+
+    alto_val = _format_dimension_value(record.get("alto"))
+    ancho_val = _format_dimension_value(record.get("ancho"))
+    if alto_val and ancho_val:
+        add_sentence(f"{alto_val}x{ancho_val} cm")
+
     peso = _as_clean_text(record.get("peso"))
     if peso:
         add_sentence(f"{peso} g.")
@@ -2093,11 +2178,10 @@ def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> di
     elif not titulo_completo:
         titulo_completo = titulo
 
+    isbn = _as_clean_text(catalog.get("isbn")) or _as_clean_text(book.get("isbn")) or _as_clean_text(metadata.get("isbn"))
     autor = _list_to_text(catalog.get("autor"), separator="; ")
     idioma = _list_to_text(catalog.get("idioma"), separator="; ")
-    palabras = _list_to_text(catalog.get("palabras_clave"), separator=", ")
-
-    isbn = _as_clean_text(catalog.get("isbn")) or _as_clean_text(book.get("isbn")) or _as_clean_text(metadata.get("isbn"))
+    palabras = _normalize_keywords_for_isbn(catalog.get("palabras_clave"), isbn=isbn)
     image_filename = _first_image_filename(book_id)
 
     pages = catalog.get("paginas")
@@ -2351,11 +2435,27 @@ def update_core_book(
             continue
         if key not in CORE_BOOKS_EDITABLE_COLUMNS:
             continue
-        updates[key] = _normalize_core_input_value(key, raw_value)
+        normalized = _normalize_core_input_value(key, raw_value)
+        if _core_values_equal(current.get(key), normalized):
+            continue
+        updates[key] = normalized
 
     merged = {**current, **updates}
+    if ("isbn" in updates) or ("palabras_clave" in updates):
+        normalized_keywords = _normalize_keywords_for_isbn(
+            merged.get("palabras_clave"),
+            isbn=merged.get("isbn"),
+        )
+        merged["palabras_clave"] = normalized_keywords
+        if _core_values_equal(current.get("palabras_clave"), normalized_keywords):
+            updates.pop("palabras_clave", None)
+        else:
+            updates["palabras_clave"] = normalized_keywords
+
     if recompute_description:
-        updates["descripcion"] = build_core_description(merged)
+        recomputed_description = build_core_description(merged)
+        if not _core_values_equal(current.get("descripcion"), recomputed_description):
+            updates["descripcion"] = recomputed_description
 
     if not updates:
         return current

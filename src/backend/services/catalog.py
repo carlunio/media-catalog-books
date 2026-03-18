@@ -275,7 +275,6 @@ def build_catalog_payload(book: dict[str, Any], *, provider: str | None = None, 
     payload.setdefault("id", book.get("id"))
     payload["catalog_provider"] = chosen_provider
     payload["catalog_model"] = chosen_model
-    payload["raw_llm_output"] = raw
 
     dimensions = _isbndb_dimensions_metric(metadata)
     if dimensions:
