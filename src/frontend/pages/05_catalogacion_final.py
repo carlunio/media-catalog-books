@@ -87,16 +87,31 @@ if not rows:
 
 ids = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
 labels: dict[str, str] = {}
+
+
+def _display_text(value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if text.lower() in {"none", "null", "nan"}:
+        return ""
+    return text
+
+
 for row in rows:
     book_id = str(row.get("id") or "").strip()
     if not book_id:
         continue
-    title = str(row.get("titulo") or "").strip() or "(sin título)"
-    author = str(row.get("autor") or "").strip() or "(sin autor)"
+    title = _display_text(row.get("titulo")) or "(sin título)"
+    author = _display_text(row.get("autor")) or "(sin autor)"
     labels[book_id] = f"{book_id} | {title} | {author}"
 
 selector_key = "core_catalog_book_selector"
+selector_pending_key = "core_catalog_book_selector_pending"
 preferred_id = get_selected_book_id()
+
+pending_selected = st.session_state.pop(selector_pending_key, None)
+if pending_selected in ids:
+    st.session_state[selector_key] = pending_selected
+
 if selector_key not in st.session_state:
     if preferred_id in ids:
         st.session_state[selector_key] = preferred_id
@@ -117,11 +132,11 @@ current_index = ids.index(selected_id)
 nav_col_prev, nav_col_next, _ = st.columns([1, 1, 4])
 with nav_col_prev:
     if st.button("← Anterior", disabled=current_index == 0, use_container_width=True):
-        st.session_state[selector_key] = ids[current_index - 1]
+        st.session_state[selector_pending_key] = ids[current_index - 1]
         st.rerun()
 with nav_col_next:
     if st.button("Siguiente →", disabled=current_index >= len(ids) - 1, use_container_width=True):
-        st.session_state[selector_key] = ids[current_index + 1]
+        st.session_state[selector_pending_key] = ids[current_index + 1]
         st.rerun()
 
 try:
@@ -139,15 +154,40 @@ def _input_key(book_id: str, field: str) -> str:
 
 
 def _value_or_empty(value: Any) -> str:
-    return str(value if value is not None else "")
+    text = str(value if value is not None else "").strip()
+    if text.lower() in {"none", "null", "nan"}:
+        return ""
+    return text
+
+
+def _normalize_session_value(field: str, value: Any) -> Any:
+    if field == "precio":
+        text = _value_or_empty(value).replace(",", ".").replace("€", "").strip()
+        if not text:
+            return 0.0
+        try:
+            return float(text)
+        except ValueError:
+            return 0.0
+    if field == "cantidad":
+        text = _value_or_empty(value)
+        if not text:
+            return 1
+        try:
+            return int(float(text))
+        except ValueError:
+            return 1
+    return _value_or_empty(value)
 
 
 def _sync_defaults(book_id: str, payload: dict[str, Any], fields: list[str]) -> None:
-    force_reset = st.session_state.get("core_catalog_last_book_id") != book_id
+    force_reset = bool(st.session_state.pop("core_catalog_force_reload", False))
+    if st.session_state.get("core_catalog_last_book_id") != book_id:
+        force_reset = True
     for field in fields:
         key = _input_key(book_id, field)
         if force_reset or key not in st.session_state:
-            st.session_state[key] = _value_or_empty(payload.get(field))
+            st.session_state[key] = _normalize_session_value(field, payload.get(field))
     st.session_state["core_catalog_last_book_id"] = book_id
 
 
@@ -165,7 +205,63 @@ def _field_options(field: str, current: str) -> list[str]:
     return options
 
 
+READ_ONLY_FIELDS: set[str] = {
+    "titulo_corto",
+    "subtitulo",
+    "titulo_completo",
+}
+
+SELECTABLE_FIELDS: set[str] = {
+    "tipo_articulo",
+    "estado_stock",
+    "estado_carga",
+    "edicion",
+    "numero_impresion",
+    "ilustraciones",
+    "categoria",
+    "genero",
+    "encuadernacion",
+    "estado_conservacion",
+    "estado_cubierta",
+    "dedicatorias",
+    "plantilla_envio",
+    "catalogo_1",
+    "catalogo_2",
+    "catalogo_3",
+}
+
+SELECTABLE_WITH_CUSTOM_VALUE_FIELDS: set[str] = {
+    "categoria",
+    "genero",
+}
+
+SALMON_FIELDS: set[str] = {
+    "edicion",
+    "numero_impresion",
+    "coleccion",
+    "numero_coleccion",
+    "obra_completa",
+    "volumen",
+}
+
+IMPORTANT_FIELDS: set[str] = {
+    "edicion",
+    "numero_coleccion",
+    "obra_completa",
+    "volumen",
+    "detalle_encuadernacion",
+    "desperfectos",
+    "url_imagenes",
+    "plantilla_envio",
+    "precio",
+}
+
+
 def _label_class(field: str) -> str:
+    if field in READ_ONLY_FIELDS:
+        return "lbl-orange-soft"
+    if field in SALMON_FIELDS:
+        return "lbl-salmon"
     if field in {"tipo_articulo", "categoria", "genero", "palabras_clave"}:
         return "lbl-blue"
     if field in {"estado_stock", "estado_carga", "plantilla_envio", "catalogo_1", "catalogo_2", "catalogo_3", "cantidad", "precio", "url_imagenes"}:
@@ -178,30 +274,171 @@ def _label_class(field: str) -> str:
         return "lbl-green"
     if field in {"encuadernacion", "detalle_encuadernacion", "estado_conservacion", "estado_cubierta", "desperfectos", "dedicatorias"}:
         return "lbl-yellow"
-    if field in {"paginas", "peso", "alto", "ancho", "fondo", "dimensiones"}:
+    if field in {"paginas", "peso", "alto", "ancho", "fondo"}:
         return "lbl-cyan"
     return "lbl-steel"
 
 
 def _render_field(label: str, field: str, *, left_col, right_col) -> None:
     current_value = str(st.session_state.get(_input_key(selected_id, field), "")).strip()
+    important_class = " is-important" if field in IMPORTANT_FIELDS else ""
     left_col.markdown(
-        f"<div class='access-label {_label_class(field)}'>{label}</div>",
+        f"<div class='access-label {_label_class(field)}{important_class}'>{label}</div>",
         unsafe_allow_html=True,
     )
     key = _input_key(selected_id, field)
+
+    if field in READ_ONLY_FIELDS:
+        right_col.text_input(
+            label,
+            value=current_value,
+            disabled=True,
+            label_visibility="collapsed",
+        )
+        return
+
     options = _field_options(field, current_value)
-    if len(options) > 1:
-        index = options.index(current_value) if current_value in options else 0
+    if field in SELECTABLE_FIELDS and len(options) > 1:
+        select_kwargs: dict[str, Any] = {}
+        if field in SELECTABLE_WITH_CUSTOM_VALUE_FIELDS:
+            select_kwargs["accept_new_options"] = True
+        select_kwargs["on_change"] = _autosave_field
+        select_kwargs["args"] = (field,)
         right_col.selectbox(
             label,
             options,
-            index=index,
             key=key,
             label_visibility="collapsed",
+            **select_kwargs,
+        )
+    elif field == "precio":
+        right_col.number_input(
+            label,
+            key=key,
+            min_value=0.0,
+            step=0.5,
+            format="%.2f",
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
+        )
+    elif field == "cantidad":
+        right_col.number_input(
+            label,
+            key=key,
+            min_value=0,
+            step=1,
+            format="%d",
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
         )
     else:
-        right_col.text_input(label, key=key, label_visibility="collapsed")
+        right_col.text_input(
+            label,
+            key=key,
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
+        )
+
+
+def _render_inline_field(container: Any, label: str, field: str, *, ratio: tuple[float, float] = (0.36, 0.64)) -> None:
+    row_label, row_input = container.columns([ratio[0], ratio[1]], gap="small")
+    _render_field(label, field, left_col=row_label, right_col=row_input)
+
+
+def _render_stacked_field(
+    container: Any,
+    label: str,
+    field: str,
+    *,
+    label_class: str | None = None,
+) -> None:
+    important_class = " is-important" if field in IMPORTANT_FIELDS else ""
+    resolved_class = label_class or _label_class(field)
+    container.markdown(
+        f"<div class='access-label {resolved_class}{important_class}'>{label}</div>",
+        unsafe_allow_html=True,
+    )
+
+    current_value = str(st.session_state.get(_input_key(selected_id, field), "")).strip()
+    key = _input_key(selected_id, field)
+
+    if field in READ_ONLY_FIELDS:
+        container.text_input(
+            label,
+            value=current_value,
+            disabled=True,
+            label_visibility="collapsed",
+        )
+        return
+
+    options = _field_options(field, current_value)
+    if field in SELECTABLE_FIELDS and len(options) > 1:
+        select_kwargs: dict[str, Any] = {}
+        if field in SELECTABLE_WITH_CUSTOM_VALUE_FIELDS:
+            select_kwargs["accept_new_options"] = True
+        select_kwargs["on_change"] = _autosave_field
+        select_kwargs["args"] = (field,)
+        container.selectbox(
+            label,
+            options,
+            key=key,
+            label_visibility="collapsed",
+            **select_kwargs,
+        )
+    elif field == "precio":
+        container.number_input(
+            label,
+            key=key,
+            min_value=0.0,
+            step=0.5,
+            format="%.2f",
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
+        )
+    elif field == "cantidad":
+        container.number_input(
+            label,
+            key=key,
+            min_value=0,
+            step=1,
+            format="%d",
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
+        )
+    else:
+        container.text_input(
+            label,
+            key=key,
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(field,),
+        )
+
+
+def _render_static_stacked_field(
+    container: Any,
+    *,
+    label: str,
+    value: str,
+    label_class: str = "lbl-blue",
+    key_suffix: str,
+) -> None:
+    container.markdown(
+        f"<div class='access-label {label_class}'>{label}</div>",
+        unsafe_allow_html=True,
+    )
+    container.text_input(
+        label,
+        value=value,
+        disabled=True,
+        key=f"core_catalog_static_{selected_id}_{key_suffix}",
+        label_visibility="collapsed",
+    )
 
 
 LEFT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
@@ -272,12 +509,10 @@ RIGHT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("Ancho", "ancho"),
             ("Fondo", "fondo"),
             ("Peso", "peso"),
-            ("Dimensiones", "dimensiones"),
             ("URL de imágenes", "url_imagenes"),
             ("Plantilla de envío", "plantilla_envio"),
             ("Cantidad", "cantidad"),
             ("Precio", "precio"),
-            ("Unidad de peso", "unidad_peso"),
             ("Catálogo 1", "catalogo_1"),
             ("Catálogo 2", "catalogo_2"),
             ("Catálogo 3", "catalogo_3"),
@@ -295,83 +530,222 @@ def _flatten_fields(groups: list[tuple[str, list[tuple[str, str]]]]) -> list[str
     return flattened
 
 
-def _render_group(group_title: str, fields: list[tuple[str, str]]) -> None:
-    st.markdown(f"<div class='access-section'>{group_title}</div>", unsafe_allow_html=True)
-    for label, field in fields:
-        row_label, row_input = st.columns([0.36, 0.64], gap="small")
-        _render_field(label, field, left_col=row_label, right_col=row_input)
-
-
 left_fields_flat = _flatten_fields(LEFT_GROUPS)
 right_fields_flat = _flatten_fields(RIGHT_GROUPS)
 all_fields = left_fields_flat + [field for field in right_fields_flat if field not in left_fields_flat]
-_sync_defaults(selected_id, book, all_fields)
 description_field = "descripcion"
+sync_fields = all_fields + [description_field]
+_sync_defaults(selected_id, book, sync_fields)
 description_key = _input_key(selected_id, description_field)
-if description_key not in st.session_state:
-    st.session_state[description_key] = _value_or_empty(book.get(description_field))
 
-st.markdown("<div class='access-panel'>", unsafe_allow_html=True)
-with st.form(f"core_catalog_form_{selected_id}"):
-    header_col_a, header_col_b = st.columns([0.35, 0.65], gap="small")
-    with header_col_a:
-        st.markdown("<div class='access-label lbl-blue'>Ref. del artículo</div>", unsafe_allow_html=True)
-    with header_col_b:
-        st.text_input("Ref", value=selected_id, disabled=True, label_visibility="collapsed")
+st.session_state["core_catalog_current_book_id"] = selected_id
+st.session_state["core_catalog_all_fields"] = list(all_fields)
+st.session_state["core_catalog_description_field"] = description_field
 
-    col_left, col_right = st.columns(2, gap="large")
 
-    with col_left:
-        for group_title, fields in LEFT_GROUPS:
-            _render_group(group_title, fields)
-
-    with col_right:
-        for group_title, fields in RIGHT_GROUPS:
-            _render_group(group_title, fields)
-
-    st.markdown("<div class='access-section'>Descripción</div>", unsafe_allow_html=True)
-    st.markdown("<div class='desc-box'>", unsafe_allow_html=True)
-    st.text_area(
-        "Descripción",
-        key=description_key,
-        height=220,
-        label_visibility="collapsed",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    action_col_save, action_col_regen = st.columns(2, gap="small")
-    with action_col_save:
-        save = st.form_submit_button("Guardar cambios", type="primary", use_container_width=True)
-    with action_col_regen:
-        regenerate_description = st.form_submit_button(
-            "Regenerar descripción automática",
-            use_container_width=True,
-        )
-
-if save or regenerate_description:
+def _payload_from_session(book_id: str) -> dict[str, Any]:
     payload_fields: dict[str, Any] = {}
     for field in all_fields:
-        payload_fields[field] = st.session_state.get(_input_key(selected_id, field))
-    payload_fields[description_field] = st.session_state.get(description_key)
-    should_recompute_description = bool(regenerate_description)
+        payload_fields[field] = st.session_state.get(_input_key(book_id, field))
+    payload_fields[description_field] = st.session_state.get(_input_key(book_id, description_field))
+    return payload_fields
 
+
+def _single_field_payload_from_session(book_id: str, field: str) -> dict[str, Any]:
+    return {field: st.session_state.get(_input_key(book_id, field))}
+
+
+def _apply_saved_book_to_session(book_id: str, payload: dict[str, Any]) -> None:
+    for field in sync_fields:
+        st.session_state[_input_key(book_id, field)] = _normalize_session_value(field, payload.get(field))
+
+
+def _save_current_book(
+    book_id: str,
+    *,
+    recompute_description: bool,
+    timeout: float = 60.0,
+    fields_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload_fields = fields_override if isinstance(fields_override, dict) else _payload_from_session(book_id)
+    result = api_put(
+        f"/core-books/{book_id}",
+        json={
+            "fields": payload_fields,
+            "recompute_description": bool(recompute_description),
+        },
+        timeout=timeout,
+    )
+    payload = result.get("book") if isinstance(result, dict) else None
+    if isinstance(payload, dict) and not bool(st.session_state.get("core_catalog_manual_save_in_progress")):
+        _apply_saved_book_to_session(book_id, payload)
+    return result if isinstance(result, dict) else {}
+
+
+def _autosave_field(field: str) -> None:
+    book_id = str(st.session_state.get("core_catalog_current_book_id") or "").strip()
+    if not book_id:
+        return
     try:
-        result = api_put(
-            f"/core-books/{selected_id}",
-            json={"fields": payload_fields, "recompute_description": should_recompute_description},
-            timeout=60.0,
+        should_recompute_description = field != description_field
+        fields_override = _single_field_payload_from_session(book_id, field)
+        _save_current_book(
+            book_id,
+            recompute_description=should_recompute_description,
+            timeout=45.0,
+            fields_override=fields_override,
         )
-        item = result.get("book") if isinstance(result, dict) else {}
-        if isinstance(item, dict):
-            for field in all_fields:
-                st.session_state[_input_key(selected_id, field)] = _value_or_empty(item.get(field))
-            st.session_state[description_key] = _value_or_empty(item.get(description_field))
+        st.session_state["core_catalog_autosave_error"] = ""
+        st.session_state["core_catalog_autosave_last_field"] = field
+    except Exception as exc:
+        st.session_state["core_catalog_autosave_error"] = f"No se pudo autoguardar '{field}': {exc}"
+
+
+autosave_error = str(st.session_state.get("core_catalog_autosave_error") or "").strip()
+if autosave_error:
+    st.error(autosave_error)
+flash_success = str(st.session_state.pop("core_catalog_flash_success", "") or "").strip()
+if flash_success:
+    st.success(flash_success)
+
+st.markdown("<div class='access-panel'>", unsafe_allow_html=True)
+save = False
+create_description = False
+col_left, col_right = st.columns(2, gap="large")
+
+with col_left:
+    # Top strip: 1/3 ref, 1/3 tipo, 1/3 estado stock/carga.
+    top_ref, top_tipo, top_estado = st.columns([1, 1, 1], gap="small")
+    _render_static_stacked_field(
+        top_ref,
+        label="Ref. del artículo",
+        value=selected_id,
+        label_class="lbl-blue",
+        key_suffix="ref",
+    )
+    _render_stacked_field(top_tipo, "Tipo de artículo", "tipo_articulo")
+    _render_inline_field(top_estado, "Estado de stock", "estado_stock", ratio=(0.52, 0.48))
+    _render_inline_field(top_estado, "Estado de carga", "estado_carga", ratio=(0.52, 0.48))
+
+    _render_inline_field(st, "Título", "titulo", ratio=(0.34, 0.66))
+
+    titulo_corto_col, subtitulo_col = st.columns(2, gap="small")
+    _render_inline_field(titulo_corto_col, "Título corto", "titulo_corto", ratio=(0.34, 0.66))
+    _render_inline_field(subtitulo_col, "Subtítulo", "subtitulo", ratio=(0.34, 0.66))
+
+    _render_inline_field(st, "Título completo", "titulo_completo", ratio=(0.32, 0.68))
+
+    autor_col, pais_autor_col = st.columns([0.64, 0.36], gap="small")
+    _render_inline_field(autor_col, "Autor", "autor", ratio=(0.3, 0.7))
+    _render_inline_field(pais_autor_col, "País del autor", "pais_autor", ratio=(0.45, 0.55))
+
+    editorial_col, isbn_col = st.columns([0.68, 0.32], gap="small")
+    _render_inline_field(editorial_col, "Editorial", "editorial", ratio=(0.3, 0.7))
+    _render_inline_field(isbn_col, "ISBN", "isbn", ratio=(0.42, 0.58))
+
+    pais_pub_col, idioma_col, anio_col = st.columns([0.48, 0.35, 0.17], gap="small")
+    _render_inline_field(pais_pub_col, "País de la publicación", "pais_publicacion", ratio=(0.58, 0.42))
+    _render_inline_field(idioma_col, "Idioma", "idioma", ratio=(0.38, 0.62))
+    _render_inline_field(anio_col, "Año", "anio", ratio=(0.42, 0.58))
+
+    edicion_col, impresion_col = st.columns(2, gap="small")
+    _render_inline_field(edicion_col, "Edición", "edicion", ratio=(0.32, 0.68))
+    _render_inline_field(impresion_col, "Nº de impresión", "numero_impresion", ratio=(0.34, 0.66))
+
+    coleccion_col, numero_col = st.columns([0.66, 0.34], gap="small")
+    _render_inline_field(coleccion_col, "Colección", "coleccion", ratio=(0.47, 0.53))
+    _render_inline_field(numero_col, "Nº en la colección", "numero_coleccion", ratio=(0.5, 0.5))
+
+    obra_col, volumen_col = st.columns([0.66, 0.34], gap="small")
+    _render_inline_field(obra_col, "Título de la obra completa", "obra_completa", ratio=(0.47, 0.53))
+    _render_inline_field(volumen_col, "Volumen", "volumen", ratio=(0.5, 0.5))
+
+    _render_inline_field(st, "Traductor", "traductor", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Ilustrador", "ilustrador", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Editor", "editor", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Fotografía de", "fotografia_de", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Introducción de", "introduccion_de", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Epílogo de", "epilogo_de", ratio=(0.32, 0.68))
+    _render_inline_field(st, "Info. sobre ilustraciones", "ilustraciones", ratio=(0.32, 0.68))
+
+with col_right:
+    _render_inline_field(st, "Categoría", "categoria", ratio=(0.33, 0.67))
+    _render_inline_field(st, "Género", "genero", ratio=(0.33, 0.67))
+    _render_inline_field(st, "Palabras clave", "palabras_clave", ratio=(0.33, 0.67))
+    _render_inline_field(st, "Encuadernación", "encuadernacion", ratio=(0.33, 0.67))
+    _render_inline_field(st, "Detalles de la encuadernación", "detalle_encuadernacion", ratio=(0.33, 0.67))
+    estado_cons_col, estado_cub_col = st.columns(2, gap="small")
+    _render_inline_field(estado_cons_col, "Estado de conservación", "estado_conservacion", ratio=(0.5, 0.5))
+    _render_inline_field(estado_cub_col, "Estado de la cubierta", "estado_cubierta", ratio=(0.5, 0.5))
+    _render_inline_field(st, "Desperfectos", "desperfectos", ratio=(0.33, 0.67))
+    _render_inline_field(st, "Dedicatorias", "dedicatorias", ratio=(0.33, 0.67))
+
+    paginas_col, alto_col = st.columns([0.67, 0.33], gap="small")
+    _render_inline_field(paginas_col, "Nº de páginas", "paginas", ratio=(0.58, 0.42))
+    _render_inline_field(alto_col, "Alto", "alto", ratio=(0.56, 0.44))
+
+    peso_col, ancho_col = st.columns([0.67, 0.33], gap="small")
+    _render_inline_field(peso_col, "Peso", "peso", ratio=(0.58, 0.42))
+    _render_inline_field(ancho_col, "Ancho", "ancho", ratio=(0.56, 0.44))
+
+    fondo_pad_col, fondo_col = st.columns([0.67, 0.33], gap="small")
+    with fondo_pad_col:
+        st.markdown("&nbsp;", unsafe_allow_html=True)
+    _render_inline_field(fondo_col, "Fondo", "fondo", ratio=(0.56, 0.44))
+
+    url_col, cat1_col = st.columns([0.68, 0.32], gap="small")
+    _render_inline_field(url_col, "URL de imágenes", "url_imagenes", ratio=(0.55, 0.45))
+    _render_inline_field(cat1_col, "Catálogo 1", "catalogo_1", ratio=(0.56, 0.44))
+
+    envio_col, cat2_col = st.columns([0.68, 0.32], gap="small")
+    _render_inline_field(envio_col, "Plantilla de envío", "plantilla_envio", ratio=(0.55, 0.45))
+    _render_inline_field(cat2_col, "Catálogo 2", "catalogo_2", ratio=(0.56, 0.44))
+
+    qty_price_col, cat3_col = st.columns([0.68, 0.32], gap="small")
+    qty_col, price_col = qty_price_col.columns([0.5, 0.5], gap="small")
+    _render_inline_field(qty_col, "Cantidad", "cantidad", ratio=(0.54, 0.46))
+    _render_inline_field(price_col, "Precio", "precio", ratio=(0.45, 0.55))
+    _render_inline_field(cat3_col, "Catálogo 3", "catalogo_3", ratio=(0.56, 0.44))
+
+    desc_label_col, desc_value_col = st.columns([0.28, 0.72], gap="small")
+    with desc_label_col:
+        st.markdown("<div class='access-label lbl-green'>Descripción</div>", unsafe_allow_html=True)
+        create_description = st.button(
+            "Crear descripción automática",
+            key=f"core_catalog_create_description_{selected_id}",
+            use_container_width=True,
+        )
+        save = st.button(
+            "Guardar cambios",
+            key=f"core_catalog_save_{selected_id}",
+            type="primary",
+            use_container_width=True,
+        )
+    with desc_value_col:
+        st.text_area(
+            "Descripción",
+            key=description_key,
+            height=220,
+            label_visibility="collapsed",
+            on_change=_autosave_field,
+            args=(description_field,),
+        )
+
+if save or create_description:
+    should_recompute_description = bool(create_description)
+    try:
+        st.session_state["core_catalog_manual_save_in_progress"] = True
+        _save_current_book(selected_id, recompute_description=should_recompute_description, timeout=60.0)
+        st.session_state["core_catalog_manual_save_in_progress"] = False
+        st.session_state["core_catalog_autosave_error"] = ""
+        st.session_state["core_catalog_force_reload"] = True
         if should_recompute_description:
-            st.success("Registro guardado y descripción regenerada")
+            st.session_state["core_catalog_flash_success"] = "Registro guardado y descripción creada"
         else:
-            st.success("Registro guardado")
+            st.session_state["core_catalog_flash_success"] = "Registro guardado"
         st.rerun()
     except Exception as exc:
+        st.session_state["core_catalog_manual_save_in_progress"] = False
         st.error(f"No se pudo guardar el formulario: {exc}")
 
 st.markdown("</div>", unsafe_allow_html=True)

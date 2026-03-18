@@ -18,6 +18,7 @@ GLOBAL_SELECTED_MODULE_KEY = "global_selected_module"
 THEME_APPLIED_KEY = "_ui_theme_applied"
 THEME_CSS_ENV_VAR = "FRONTEND_THEME_CSS"
 DEFAULT_THEME_CSS_PATH = Path(__file__).resolve().parent / "assets" / "theme.css"
+APP_ICON_PATH = Path(__file__).resolve().parents[2] / "assets" / "dani.png"
 
 
 def _resolve_theme_css_path() -> Path:
@@ -54,8 +55,12 @@ def _apply_theme() -> None:
 
 
 def configure_page(title: str = "Media Catalog Books") -> None:
+    page_icon = str(APP_ICON_PATH) if APP_ICON_PATH.exists() else None
     try:
-        st.set_page_config(page_title=title, layout="wide")
+        if page_icon:
+            st.set_page_config(page_title=title, layout="wide", page_icon=page_icon)
+        else:
+            st.set_page_config(page_title=title, layout="wide")
     except Exception:
         pass
     _apply_theme()
