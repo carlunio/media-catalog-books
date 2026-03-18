@@ -45,6 +45,7 @@ endif
 BACKEND_APP := src.backend.main:app
 FRONTEND_APP := $(MAKEFILE_DIR)/src/frontend/app.py
 INIT_DB_SCRIPT := $(MAKEFILE_DIR)/scripts/init_db.py
+DB_MAINT_SCRIPT := $(MAKEFILE_DIR)/scripts/db_maintenance.py
 
 # =========================
 # PORTS
@@ -55,7 +56,7 @@ FRONT_PORT ?= 8501
 # =========================
 # PHONY
 # =========================
-.PHONY: setup install init-db dev-back dev-front dev stop stop-back stop-front restart clean lint format
+.PHONY: setup install init-db db-maint db-repack db-repack-replace dev-back dev-front dev stop stop-back stop-front restart clean lint format
 .PHONY: ensure-env
 
 setup:
@@ -72,6 +73,15 @@ ensure-env:
 
 init-db: ensure-env
 	$(PYTHON) $(INIT_DB_SCRIPT)
+
+db-maint: ensure-env
+	$(PYTHON) $(DB_MAINT_SCRIPT) --db $(DB_PATH)
+
+db-repack: ensure-env
+	$(PYTHON) $(DB_MAINT_SCRIPT) --db $(DB_PATH) --repack
+
+db-repack-replace: ensure-env
+	$(PYTHON) $(DB_MAINT_SCRIPT) --db $(DB_PATH) --repack --replace
 
 dev-back:
 ifneq ($(SKIP_ENSURE),1)

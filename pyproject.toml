@@ -13,7 +13,9 @@ dependencies = [
   "pillow",
   "pillow-heif",
   "openai",
-  "langgraph"
+  "langgraph",
+  "langcodes",
+  "iso639"
 ]
 
 [project.optional-dependencies]
