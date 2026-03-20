@@ -7,7 +7,36 @@ __pycache__/
 .streamlit/
 .pytest_cache/
 .ruff_cache/
-notebooks/
-data/
+notebooks/*
 
-/assets/
+# Keep only the data folder structure in git:
+# data/
+#   input/
+#     A/
+#     B/
+#     C/
+#   output/
+/data/*
+!/data/.gitkeep
+!/data/input/
+!/data/output/
+
+/data/input/*
+!/data/input/.gitkeep
+!/data/input/A/
+!/data/input/B/
+!/data/input/C/
+
+/data/input/A/*
+!/data/input/A/.gitkeep
+/data/input/B/*
+!/data/input/B/.gitkeep
+/data/input/C/*
+!/data/input/C/.gitkeep
+
+/data/output/*
+!/data/output/.gitkeep
+
+# Keep assets folder present but empty (only placeholder).
+/assets/*
+!/assets/.gitkeep
