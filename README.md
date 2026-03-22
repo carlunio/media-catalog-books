@@ -64,7 +64,7 @@ Queda reservada para el volcado final de catalogacion consolidada (a partir de f
 - `src/backend`: API, servicios, schemas, workflow
 - `src/frontend`: app Streamlit y paginas por fase
 - `data`: entrada/salida y DuckDB
-- `exports`: exportaciones finales
+- `data/output/exports`: exportaciones finales
 
 ## Quick start
 
@@ -102,14 +102,18 @@ Ademas, `make dev` verifica/crea `.venv` e instala dependencias si faltan.
 - `OPENAI_API_KEY`: habilita OCR con OpenAI
 - `OCR_OPENAI_MODEL`: modelo OCR para OpenAI
 - `OCR_OLLAMA_MODEL`: modelo OCR multimodal para Ollama (default: `glm-ocr:latest`)
+- `OCR_RESIZE_TO_1800_DEFAULT`: default del checkbox de UI para reducir imagen a 1800 px antes de OCR con glm-ocr (`true` por defecto)
+- `OCR_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo OCR Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
 - `OCR_ISBN_OLLAMA_MODEL`: modelo Ollama para extraer ISBN desde el texto OCR (default: `gpt-oss:20b`)
 - `OCR_OLLAMA_FALLBACK_MODELS`: lista CSV opcional de modelos OCR de respaldo en Ollama (default: vacio, sin fallback)
 - `OCR_USE_SIDECAR`: si `true`, usa `OCR_OUTPUT_DIR/<book_id>.txt`; por defecto `false` para OCR real sobre imagen
 - `OLLAMA_BASE_URL`: URL base del servicio Ollama
 - `OLLAMA_TIMEOUT_SECONDS`: timeout para llamadas a Ollama (vacio = sin timeout, valor recomendado si quieres limitar: `120`)
 - `CATALOG_MODEL`: compatibilidad hacia atras (fallback de modelo catalogo)
+- `CATALOG_PROVIDER`: `openai` u `ollama` (si está en `.env`, manda ese valor; fallback interno del backend: `openai`)
 - `CATALOG_OPENAI_MODEL`: modelo de arbitraje para OpenAI
 - `CATALOG_OLLAMA_MODEL`: modelo de arbitraje para Ollama
+- `CATALOG_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo catalogo Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
 - `CATALOG_ARBITER_ENABLED`: activa arbitraje LLM en casos dudosos
 - `CATALOG_ARBITER_PROVIDER`: `auto`, `openai`, `ollama` o `none`
 - `CATALOG_ARBITER_MIN_CONFIDENCE`: umbral para disparar arbitraje

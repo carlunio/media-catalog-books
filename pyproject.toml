@@ -9,7 +9,7 @@ dependencies = [
   "streamlit",
   "duckdb",
   "requests",
-  "ollama",
+  "ollama>=0.6",
   "pillow",
   "pillow-heif",
   "openai",
