@@ -316,12 +316,29 @@ if running_total > 0:
             for row in running_items:
                 node = str(row.get("workflow_current_node") or "").strip()
                 stage = str(row.get("pipeline_stage") or "").strip()
+                workflow_action = str(row.get("workflow_action") or "").strip()
+
+                llm_value = ""
+                if "llm=" in workflow_action:
+                    llm_value = workflow_action.split("llm=", maxsplit=1)[1].strip()
+                    if "|" in llm_value:
+                        llm_value = llm_value.split("|", maxsplit=1)[0].strip()
+
+                if not llm_value and node == "ocr":
+                    provider = str(row.get("ocr_provider") or "").strip()
+                    model = str(row.get("ocr_model") or "").strip()
+                    if provider and model:
+                        llm_value = f"{provider}/{model}"
+                    elif provider or model:
+                        llm_value = provider or model
+
                 running_table.append(
                     {
                         "id": str(row.get("id") or ""),
                         "nodo": node or "(sin nodo)",
                         "etapa": stage or "(sin etapa)",
-                        "accion": f"Ejecutando {node}" if node else "Ejecutando workflow",
+                        "accion": workflow_action or (f"Ejecutando {node}" if node else "Ejecutando workflow"),
+                        "llm": llm_value or "-",
                         "attempt": int(row.get("workflow_attempt") or 0),
                         "updated_at": row.get("updated_at"),
                     }

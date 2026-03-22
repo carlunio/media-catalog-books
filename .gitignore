@@ -41,6 +41,15 @@ notebooks/*
 !/data/output/exports/
 /data/output/covers/*
 !/data/output/covers/.gitkeep
+/data/output/covers/A/*
+!/data/output/covers/A/.gitkeep
+/data/output/covers/B/*
+!/data/output/covers/B/.gitkeep
+/data/output/covers/C/*
+!/data/output/covers/C/.gitkeep
+!/data/output/covers/A/
+!/data/output/covers/B/
+!/data/output/covers/C/
 /data/output/exports/*
 !/data/output/exports/.gitkeep
 

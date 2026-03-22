@@ -4,6 +4,7 @@ from typing import Any
 import requests
 
 from ..config import DEFAULT_COVERS_OUTPUT_DIR, REQUEST_TIMEOUT_SECONDS
+from ..normalizers import split_book_id
 from . import books
 
 
@@ -65,6 +66,14 @@ def _download_one(url: str, destination_base: Path, *, timeout: float) -> Path:
     return path
 
 
+def _output_dir_for_book(book_id: str) -> Path:
+    parts = split_book_id(book_id)
+    if parts is None:
+        return DEFAULT_COVERS_OUTPUT_DIR
+    module_value, block_value, _ = parts
+    return DEFAULT_COVERS_OUTPUT_DIR / block_value / module_value
+
+
 def run_one(book_id: str, *, overwrite: bool = False, timeout: float = REQUEST_TIMEOUT_SECONDS) -> dict[str, Any]:
     book = books.get_book(book_id)
     if book is None:
@@ -72,7 +81,8 @@ def run_one(book_id: str, *, overwrite: bool = False, timeout: float = REQUEST_T
 
     existing_status = str(book.get("cover_status") or "").strip().lower()
     existing_cover_path = str(book.get("cover_path") or "").strip()
-    if existing_status == "downloaded" and existing_cover_path and not overwrite:
+    existing_cover_exists = Path(existing_cover_path).exists() if existing_cover_path else False
+    if existing_status == "downloaded" and existing_cover_path and existing_cover_exists and not overwrite:
         return {"id": book_id, "status": "skipped", "reason": "cover already downloaded"}
 
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
@@ -82,7 +92,7 @@ def run_one(book_id: str, *, overwrite: bool = False, timeout: float = REQUEST_T
         books.update_cover(book_id, cover_path=None, status="missing", error="No cover URL in metadata")
         return {"id": book_id, "status": "missing", "reason": "No cover URL in metadata"}
 
-    output_dir = DEFAULT_COVERS_OUTPUT_DIR
+    output_dir = _output_dir_for_book(book_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     tmp_downloads: list[Path] = []

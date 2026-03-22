@@ -439,7 +439,7 @@ with right:
             for item in candidate_details
         ]
         st.markdown("Candidatos ISBN detectados")
-        st.dataframe(table_rows, hide_index=True, use_container_width=True)
+        st.dataframe(table_rows, hide_index=True, width="stretch")
 
     with st.expander("Detalle de validacion ISBN", expanded=False):
         st.json(validation_from_text)
