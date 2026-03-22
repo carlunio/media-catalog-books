@@ -70,6 +70,34 @@ def _should_stop_after(state: WorkflowState, stage: StageName) -> bool:
     return state.get("stop_after") == stage
 
 
+def _compose_running_action(
+    *,
+    stage: str,
+    action: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
+    pieces: list[str] = []
+
+    action_text = str(action or "").strip()
+    if action_text:
+        pieces.append(action_text)
+
+    stage_text = str(stage or "").strip()
+    if stage_text:
+        pieces.append(f"stage={stage_text}")
+
+    provider_text = str(provider or "").strip()
+    model_text = str(model or "").strip()
+    if provider_text or model_text:
+        llm_text = provider_text or "unknown"
+        if model_text:
+            llm_text = f"{llm_text}/{model_text}"
+        pieces.append(f"llm={llm_text}")
+
+    return " | ".join(pieces)
+
+
 def _with_failure(book_id: str, *, step: str, error: str) -> WorkflowState:
     books.set_workflow_error(book_id, node=step, error=error)
     return {
@@ -209,7 +237,16 @@ def _ocr_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
-    books.set_workflow_running(book_id, node="ocr", action=state.get("action"))
+    books.set_workflow_running(
+        book_id,
+        node="ocr",
+        action=_compose_running_action(
+            stage="ocr",
+            action=state.get("action"),
+            provider=state.get("ocr_provider"),
+            model=state.get("ocr_model"),
+        ),
+    )
 
     result = ocr.run_one(
         book_id,
@@ -254,7 +291,11 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
-    books.set_workflow_running(book_id, node="metadata", action=state.get("action"))
+    books.set_workflow_running(
+        book_id,
+        node="metadata",
+        action=_compose_running_action(stage="metadata", action=state.get("action")),
+    )
 
     result = metadata.run_one(book_id, overwrite=bool(state.get("overwrite")))
     if str(result.get("status") or "").strip().lower() == "error":
@@ -279,7 +320,16 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
-    books.set_workflow_running(book_id, node="catalog", action=state.get("action"))
+    books.set_workflow_running(
+        book_id,
+        node="catalog",
+        action=_compose_running_action(
+            stage="catalog",
+            action=state.get("action"),
+            provider=state.get("catalog_provider"),
+            model=state.get("catalog_model"),
+        ),
+    )
 
     result = catalog.run_one(
         book_id,
@@ -309,7 +359,11 @@ def _cover_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
-    books.set_workflow_running(book_id, node="cover", action=state.get("action"))
+    books.set_workflow_running(
+        book_id,
+        node="cover",
+        action=_compose_running_action(stage="cover", action=state.get("action")),
+    )
 
     result = covers.run_one(book_id, overwrite=bool(state.get("overwrite")))
     if str(result.get("status") or "").strip().lower() == "error":

@@ -59,7 +59,7 @@ top_col_a, top_col_b = st.columns([1, 1])
 with top_col_a:
     st.caption(f"Bloque {scope_block} · Módulo {scope_module}")
 with top_col_b:
-    if st.button("Sincronizar desde catalogación automática", use_container_width=True):
+    if st.button("Sincronizar desde catalogación automática", width="stretch"):
         try:
             result = api_post("/core-books/bootstrap", params={**scope, "limit": 5000}, timeout=90.0)
             st.success(f"Registros sincronizados: {int(result.get('upserted') or 0)}")
@@ -131,15 +131,15 @@ set_selected_book_id(selected_id)
 current_index = ids.index(selected_id)
 nav_col_prev, nav_col_next, nav_col_sync = st.columns([1, 1, 2])
 with nav_col_prev:
-    if st.button("← Anterior", disabled=current_index == 0, use_container_width=True):
+    if st.button("← Anterior", disabled=current_index == 0, width="stretch"):
         st.session_state[selector_pending_key] = ids[current_index - 1]
         st.rerun()
 with nav_col_next:
-    if st.button("Siguiente →", disabled=current_index >= len(ids) - 1, use_container_width=True):
+    if st.button("Siguiente →", disabled=current_index >= len(ids) - 1, width="stretch"):
         st.session_state[selector_pending_key] = ids[current_index + 1]
         st.rerun()
 with nav_col_sync:
-    if st.button("Reiniciar este ítem desde catalogación automática", use_container_width=True):
+    if st.button("Reiniciar este ítem desde catalogación automática", width="stretch"):
         try:
             api_post(
                 f"/core-books/{selected_id}/sync",
@@ -729,13 +729,13 @@ with col_right:
         create_description = st.button(
             "Crear descripción automática",
             key=f"core_catalog_create_description_{selected_id}",
-            use_container_width=True,
+            width="stretch",
         )
         save = st.button(
             "Guardar cambios",
             key=f"core_catalog_save_{selected_id}",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
     with desc_value_col:
         st.text_area(

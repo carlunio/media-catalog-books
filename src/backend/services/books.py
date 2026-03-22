@@ -618,7 +618,10 @@ def _create_books_core_schema(con: Any) -> None:
             b.estado_conservacion AS bookcondition,
             b.palabras_clave AS keywords,
             b.url_imagenes AS imgurl,
-            b.precio AS price,
+            CASE
+                WHEN b.precio IS NULL THEN NULL
+                ELSE CAST(CAST(b.precio AS DECIMAL(18, 2)) AS VARCHAR) || ' €'
+            END AS price,
             b.cantidad AS quantity,
             b.descripcion AS description
         FROM books b
@@ -657,6 +660,7 @@ def init_table() -> None:
 
                 workflow_status VARCHAR DEFAULT 'pending',
                 workflow_current_node VARCHAR,
+                workflow_action VARCHAR,
                 workflow_attempt INTEGER DEFAULT 0,
                 workflow_needs_review BOOLEAN DEFAULT FALSE,
                 workflow_review_reason VARCHAR,
@@ -674,6 +678,11 @@ def init_table() -> None:
                 con.execute(f"ALTER TABLE book_items DROP COLUMN IF EXISTS {legacy_column}")
             except Exception:
                 pass
+
+        try:
+            con.execute("ALTER TABLE book_items ADD COLUMN IF NOT EXISTS workflow_action VARCHAR")
+        except Exception:
+            pass
 
         con.execute(
             """
@@ -1364,11 +1373,13 @@ def _update_book(book_id: str, fields: dict[str, Any], *, con: Any | None = None
 
 
 def set_workflow_running(book_id: str, *, node: str, action: str | None = None) -> None:
+    action_text = str(action or "").strip() or None
     _update_book(
         book_id,
         {
             "workflow_status": "running",
             "workflow_current_node": node,
+            "workflow_action": action_text,
             "workflow_needs_review": False,
             "workflow_review_reason": None,
             "pipeline_stage": f"running:{node}" if node else "running",
@@ -1382,6 +1393,7 @@ def set_workflow_pending(book_id: str, *, node: str, reason: str | None = None) 
         {
             "workflow_status": "pending",
             "workflow_current_node": node,
+            "workflow_action": None,
             "workflow_needs_review": False,
             "workflow_review_reason": reason,
         },
@@ -1395,6 +1407,7 @@ def set_workflow_error(book_id: str, *, node: str, error: str) -> None:
         {
             "workflow_status": "error",
             "workflow_current_node": node,
+            "workflow_action": None,
             "workflow_review_reason": error,
         },
     )
@@ -1413,6 +1426,7 @@ def set_workflow_review(
         {
             "workflow_status": "review",
             "workflow_current_node": node,
+            "workflow_action": None,
             "workflow_needs_review": True,
             "workflow_review_reason": text,
             "pipeline_stage": "review",
@@ -1425,6 +1439,7 @@ def clear_workflow_review(book_id: str) -> None:
         book_id,
         {
             "workflow_status": "pending",
+            "workflow_action": None,
             "workflow_needs_review": False,
             "workflow_review_reason": None,
         },
@@ -1438,6 +1453,7 @@ def set_workflow_done(book_id: str, *, node: str) -> None:
         {
             "workflow_status": "done",
             "workflow_current_node": node,
+            "workflow_action": None,
             "workflow_needs_review": False,
             "workflow_review_reason": None,
             "pipeline_stage": "done",
@@ -1473,6 +1489,7 @@ def reset_from_stage(book_id: str, stage: str) -> None:
     fields: dict[str, Any] = {
         "workflow_status": "pending",
         "workflow_current_node": None,
+        "workflow_action": None,
         "workflow_needs_review": False,
         "workflow_review_reason": None,
     }
@@ -1542,6 +1559,7 @@ def recover_stale_running_workflows(*, reason: str = "Recovered after backend re
             UPDATE book_items
             SET workflow_status = 'pending',
                 workflow_current_node = 'recovered',
+                workflow_action = NULL,
                 workflow_review_reason = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE workflow_status = 'running'
