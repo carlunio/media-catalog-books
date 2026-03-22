@@ -71,9 +71,27 @@ CATALOG_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
 
 def seed_widget_once(key: str, value: Any) -> None:
     marker = f"__seeded__{key}"
-    if st.session_state.get(marker):
-        return
-    st.session_state[key] = value
+    marker_value = f"__seeded_value__{key}"
+
+    has_key = key in st.session_state
+    current_value = st.session_state.get(key)
+    previous_seed = st.session_state.get(marker_value)
+
+    should_seed = False
+    if not has_key:
+        should_seed = True
+    elif previous_seed is None:
+        # Backward-compatible migration from older sessions where only a boolean
+        # marker existed (or no marker value was tracked).
+        should_seed = True
+    elif current_value == previous_seed:
+        # Keep defaults in sync with .env while the user has not changed the widget.
+        should_seed = True
+
+    if should_seed:
+        st.session_state[key] = value
+
+    st.session_state[marker_value] = value
     st.session_state[marker] = True
 
 
@@ -410,6 +428,9 @@ def render_ollama_model_selector(
             preferred = display_options[0]
 
         seed_widget_once(key, preferred)
+        current_value = str(st.session_state.get(key) or "").strip()
+        if current_value not in display_options:
+            st.session_state[key] = preferred
         selected = str(st.selectbox(label, display_options, key=key, disabled=disabled) or "").strip()
         if default_text and selected == default_text and matched_default is None:
             st.caption(
