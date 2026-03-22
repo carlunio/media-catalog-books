@@ -3,11 +3,22 @@ import streamlit as st
 
 try:
     from src.frontend.utils import (
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         WORKFLOW_STAGES,
         api_get,
         api_post,
         configure_page,
         load_ollama_models,
+        render_ollama_model_selector,
+        seed_widget_once,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -15,11 +26,22 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover
     from frontend.utils import (
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         WORKFLOW_STAGES,
         api_get,
         api_post,
         configure_page,
         load_ollama_models,
+        render_ollama_model_selector,
+        seed_widget_once,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -50,49 +72,91 @@ with col_b:
 with col_c:
     max_attempts = st.number_input("Reintentos", min_value=0, max_value=20, value=2)
 
-default_ocr_ollama_model = "glm-ocr:latest"
-default_catalog_ollama_model = "qwen2.5:14b"
-default_catalog_openai_model = "gpt-4o-mini"
-
-st.text_input("OCR provider", value="ollama", disabled=True)
-ocr_provider = "ollama"
 try:
     models = load_ollama_models()
 except Exception:
     models = []
-options = [default_ocr_ollama_model] + [name for name in models if name != default_ocr_ollama_model]
-if len(options) > 1:
-    ocr_model = st.selectbox("Modelo OCR", options, index=0)
+
+ocr_controls_enabled = stage == "ocr"
+catalog_controls_enabled = stage == "catalog"
+
+ocr_provider_options = ["openai", "ollama"]
+ocr_provider_index = 0
+if OCR_PROVIDER_DEFAULT in ocr_provider_options:
+    ocr_provider_index = ocr_provider_options.index(OCR_PROVIDER_DEFAULT)
+seed_widget_once("stage_ocr_provider", ocr_provider_options[ocr_provider_index])
+ocr_provider = st.selectbox(
+    "OCR provider",
+    ocr_provider_options,
+    key="stage_ocr_provider",
+    disabled=not ocr_controls_enabled,
+)
+if ocr_provider == "ollama":
+    ocr_model = render_ollama_model_selector(
+        label="Modelo OCR",
+        key="stage_ocr_model_ollama",
+        installed_models=models,
+        default_model=OCR_OLLAMA_MODEL_DEFAULT,
+        suggested_models=OCR_OLLAMA_MODEL_SUGGESTIONS,
+        disabled=not ocr_controls_enabled,
+    )
 else:
+    seed_widget_once("stage_ocr_model_openai", OCR_OPENAI_MODEL_DEFAULT)
     ocr_model = st.text_input(
         "Modelo OCR",
-        value=default_ocr_ollama_model,
-        placeholder=default_ocr_ollama_model,
+        placeholder=OCR_OPENAI_MODEL_DEFAULT,
+        key="stage_ocr_model_openai",
+        disabled=not ocr_controls_enabled,
     )
+seed_widget_once("stage_ocr_resize_to_1800", OCR_RESIZE_TO_1800_DEFAULT)
+ocr_resize_to_1800 = st.checkbox(
+    "Reducir imagen a 1800 px (solo para glm-ocr)",
+    key="stage_ocr_resize_to_1800",
+    help="Si esta activo y el modelo OCR empieza por 'glm-ocr', se redimensiona la imagen al lado maximo 1800.",
+    disabled=not ocr_controls_enabled,
+)
+if not ocr_controls_enabled:
+    st.caption("Controles OCR desactivados: la etapa seleccionada no es OCR.")
 
 st.caption("Configuracion de catalogacion automatica")
 catalog_col_a, catalog_col_b = st.columns([1, 2])
 with catalog_col_a:
-    catalog_provider = st.selectbox("Provider catalogo", ["openai", "ollama"], index=0)
+    catalog_provider_options = ["openai", "ollama"]
+    catalog_provider_index = 0
+    if CATALOG_PROVIDER_DEFAULT in catalog_provider_options:
+        catalog_provider_index = catalog_provider_options.index(CATALOG_PROVIDER_DEFAULT)
+    seed_widget_once("stage_catalog_provider", catalog_provider_options[catalog_provider_index])
+    catalog_provider = st.selectbox(
+        "Provider catalogo",
+        catalog_provider_options,
+        key="stage_catalog_provider",
+        disabled=not catalog_controls_enabled,
+    )
 with catalog_col_b:
     if catalog_provider == "ollama":
-        catalog_options = [default_catalog_ollama_model] + [
-            name for name in models if name != default_catalog_ollama_model
-        ]
-        if len(catalog_options) > 1:
-            catalog_model = st.selectbox("Modelo catalogo", catalog_options, index=0)
-        else:
-            catalog_model = st.text_input(
-                "Modelo catalogo",
-                value=default_catalog_ollama_model,
-                placeholder=default_catalog_ollama_model,
-            )
+        catalog_model = render_ollama_model_selector(
+            label="Modelo catalogo",
+            key="stage_catalog_model_ollama",
+            installed_models=models,
+            default_model=CATALOG_OLLAMA_MODEL_DEFAULT,
+            suggested_models=CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+            disabled=not catalog_controls_enabled,
+        )
     else:
+        seed_widget_once("stage_catalog_model_openai", CATALOG_OPENAI_MODEL_DEFAULT)
         catalog_model = st.text_input(
             "Modelo catalogo",
-            value=default_catalog_openai_model,
-            placeholder=default_catalog_openai_model,
+            placeholder=CATALOG_OPENAI_MODEL_DEFAULT,
+            key="stage_catalog_model_openai",
+            disabled=not catalog_controls_enabled,
         )
+if not catalog_controls_enabled:
+    st.caption("Controles de catalogacion desactivados: la etapa seleccionada no es catalog.")
+
+if ocr_controls_enabled:
+    st.caption(f"OCR efectivo (si no tocas nada): `{ocr_provider}` / `{ocr_model}`")
+if catalog_controls_enabled:
+    st.caption(f"Catalog efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`")
 
 if st.button("Ejecutar etapa", type="primary"):
     payload = {
@@ -104,10 +168,11 @@ if st.button("Ejecutar etapa", type="primary"):
         "stop_after": stage,
         "overwrite": overwrite,
         "max_attempts": int(max_attempts),
-        "ocr_provider": ocr_provider,
-        "ocr_model": ocr_model.strip() or None,
-        "catalog_provider": catalog_provider,
-        "catalog_model": catalog_model.strip() or None,
+        "ocr_provider": ocr_provider if stage == "ocr" else None,
+        "ocr_model": (ocr_model.strip() or None) if stage == "ocr" else None,
+        "ocr_resize_to_1800": bool(ocr_resize_to_1800) if stage == "ocr" else False,
+        "catalog_provider": catalog_provider if stage == "catalog" else None,
+        "catalog_model": (catalog_model.strip() or None) if stage == "catalog" else None,
     }
     try:
         result = api_post("/workflow/run", json=payload, timeout=600.0)

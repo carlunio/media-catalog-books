@@ -12,6 +12,13 @@ try:
         api_post,
         api_put,
         configure_page,
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -24,6 +31,13 @@ except ModuleNotFoundError:  # pragma: no cover
         api_post,
         api_put,
         configure_page,
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -32,6 +46,13 @@ except ModuleNotFoundError:  # pragma: no cover
     )
 
 ISBN_CANDIDATE_PATTERN = re.compile(r"[0-9XxIiLlOo\- ]{9,}")
+STAGE_ORDER = ("ocr", "metadata", "catalog", "cover")
+STAGE_LABELS = {
+    "ocr": "OCR",
+    "metadata": "Metadata",
+    "catalog": "Catalog",
+    "cover": "Cover",
+}
 
 configure_page("Revision OCR | Media Catalog Books")
 st.title("Fase 2 · Revision OCR e ISBN")
@@ -177,10 +198,59 @@ def _filter_rows(rows: list[dict], mode: str) -> list[dict]:
     return rows
 
 
+def _review_origin_stage(book: dict) -> str | None:
+    node = str(book.get("workflow_current_node") or "").strip().lower()
+    reason = str(book.get("workflow_review_reason") or "").strip().lower()
+
+    if node.startswith("stage:"):
+        candidate = node.split(":", maxsplit=1)[1].strip()
+        if candidate in STAGE_ORDER:
+            return candidate
+    if node.startswith("retry_"):
+        candidate = node[len("retry_") :].strip()
+        if candidate in STAGE_ORDER:
+            return candidate
+
+    for stage in STAGE_ORDER:
+        if node == stage or node.startswith(f"{stage}_") or node.startswith(f"{stage}:"):
+            return stage
+
+    for stage in STAGE_ORDER:
+        if reason.startswith(stage) or f"stage:{stage}" in reason:
+            return stage
+
+    if "isbn" in reason or "ocr" in reason:
+        return "ocr"
+    return None
+
+
+def _retry_stage_options(book: dict, *, origin_stage: str | None = None) -> list[str]:
+    ocr_status = str(book.get("ocr_status") or "").strip().lower()
+    metadata_status = str(book.get("metadata_status") or "").strip().lower()
+    catalog_status = str(book.get("catalog_status") or "").strip().lower()
+    cover_status = str(book.get("cover_status") or "").strip().lower()
+
+    max_index = 0
+    if ocr_status in {"processed", "manual", "skipped"}:
+        max_index = 0
+    if metadata_status in {"fetched", "partial", "manual", "skipped"}:
+        max_index = 1
+    if catalog_status in {"built", "partial", "manual"}:
+        max_index = 2
+    if cover_status in {"downloaded", "manual", "skipped"}:
+        max_index = 3
+
+    if origin_stage in STAGE_ORDER:
+        max_index = max(max_index, STAGE_ORDER.index(str(origin_stage)))
+
+    return list(STAGE_ORDER[: max_index + 1])
+
+
 def _sync_form_defaults(book_id: str, book: dict) -> tuple[str, str, str]:
     credits_key = f"ocr_review_credits_{book_id}"
     isbn_raw_key = f"ocr_review_isbn_raw_{book_id}"
     isbn_key = f"ocr_review_isbn_{book_id}"
+    pending_key = f"ocr_review_pending_patch_{book_id}"
 
     if credits_key not in st.session_state:
         st.session_state[credits_key] = str(book.get("credits_text") or "")
@@ -189,7 +259,34 @@ def _sync_form_defaults(book_id: str, book: dict) -> tuple[str, str, str]:
     if isbn_key not in st.session_state:
         st.session_state[isbn_key] = str(book.get("isbn") or "")
 
+    pending = st.session_state.pop(pending_key, None)
+    if isinstance(pending, dict):
+        if "credits_text" in pending:
+            st.session_state[credits_key] = str(pending.get("credits_text") or "")
+        if "isbn_raw" in pending:
+            st.session_state[isbn_raw_key] = str(pending.get("isbn_raw") or "")
+        if "isbn" in pending:
+            st.session_state[isbn_key] = str(pending.get("isbn") or "")
+
     return credits_key, isbn_raw_key, isbn_key
+
+
+def _queue_form_patch(
+    book_id: str,
+    *,
+    credits_text: str | None = None,
+    isbn_raw: str | None = None,
+    isbn: str | None = None,
+) -> None:
+    patch: dict[str, str] = {}
+    if credits_text is not None:
+        patch["credits_text"] = str(credits_text)
+    if isbn_raw is not None:
+        patch["isbn_raw"] = str(isbn_raw)
+    if isbn is not None:
+        patch["isbn"] = str(isbn)
+    if patch:
+        st.session_state[f"ocr_review_pending_patch_{book_id}"] = patch
 
 
 scope_block, scope_module = select_module_scope(key_prefix="review_scope", title="Modulo de trabajo")
@@ -366,8 +463,11 @@ with right:
 
     if suggest:
         suggested = _derive_isbn_from_text(st.session_state.get(credits_key, ""))
-        st.session_state[isbn_raw_key] = str(suggested.get("isbn_raw") or "")
-        st.session_state[isbn_key] = str(suggested.get("isbn") or "")
+        _queue_form_patch(
+            selected_id,
+            isbn_raw=str(suggested.get("isbn_raw") or ""),
+            isbn=str(suggested.get("isbn") or ""),
+        )
         st.rerun()
 
     if save:
@@ -382,8 +482,7 @@ with right:
             if isinstance(result, dict):
                 isbn_value = str(result.get("isbn") or "").strip()
                 isbn_raw_value = str(result.get("isbn_raw") or "").strip()
-                st.session_state[isbn_key] = isbn_value
-                st.session_state[isbn_raw_key] = isbn_raw_value
+                _queue_form_patch(selected_id, isbn_raw=isbn_raw_value, isbn=isbn_value)
                 if isbn_value:
                     st.success(f"ISBN final validado: {isbn_value}")
                 else:
@@ -407,8 +506,7 @@ with right:
             if isinstance(result, dict):
                 isbn_value = str(result.get("isbn") or "").strip()
                 isbn_raw_value = str(result.get("isbn_raw") or "").strip()
-                st.session_state[isbn_key] = isbn_value
-                st.session_state[isbn_raw_key] = isbn_raw_value
+                _queue_form_patch(selected_id, isbn_raw=isbn_raw_value, isbn=isbn_value)
                 with st.expander("Resultado de consolidacion ISBN", expanded=False):
                     st.json(result)
             st.rerun()
@@ -420,6 +518,18 @@ st.subheader("Acciones de review")
 
 if bool(book.get("workflow_needs_review")):
     st.warning(str(book.get("workflow_review_reason") or "Requiere revision manual"))
+    origin_stage = _review_origin_stage(book)
+
+    if origin_stage:
+        st.caption(f"Entró en review desde etapa: **{STAGE_LABELS.get(origin_stage, origin_stage)}**")
+    else:
+        st.caption("No se pudo inferir con precisión la etapa origen de review.")
+
+    retry_options = _retry_stage_options(book, origin_stage=origin_stage)
+    default_retry_stage = origin_stage if origin_stage in retry_options else retry_options[-1]
+    retry_selector_key = f"book_review_retry_stage_{selected_id}"
+    if retry_selector_key not in st.session_state:
+        st.session_state[retry_selector_key] = default_retry_stage
 
     action_col_a, action_col_b = st.columns(2)
     with action_col_a:
@@ -436,19 +546,48 @@ if bool(book.get("workflow_needs_review")):
                 st.error(f"No se pudo aprobar el libro: {exc}")
 
     with action_col_b:
-        if st.button("Reintentar OCR", key="book_review_retry_ocr"):
+        retry_stage = st.selectbox(
+            "Etapa a reintentar",
+            retry_options,
+            key=retry_selector_key,
+            format_func=lambda value: STAGE_LABELS.get(str(value), str(value)),
+        )
+        if st.button("Reintentar", key="book_review_retry"):
             try:
+                ocr_provider_default = OCR_PROVIDER_DEFAULT
+                if ocr_provider_default not in {"openai", "ollama"}:
+                    ocr_provider_default = "ollama"
+                catalog_provider_default = CATALOG_PROVIDER_DEFAULT
+                if catalog_provider_default not in {"openai", "ollama"}:
+                    catalog_provider_default = "openai"
+
+                ocr_model_default = (
+                    OCR_OPENAI_MODEL_DEFAULT if ocr_provider_default == "openai" else OCR_OLLAMA_MODEL_DEFAULT
+                )
+                catalog_model_default = (
+                    CATALOG_OPENAI_MODEL_DEFAULT
+                    if catalog_provider_default == "openai"
+                    else CATALOG_OLLAMA_MODEL_DEFAULT
+                )
                 api_post(
                     f"/workflow/review/{selected_id}",
-                    json={"action": "retry_from_ocr"},
+                    json={
+                        "action": f"retry_from_{retry_stage}",
+                        "ocr_provider": ocr_provider_default,
+                        "ocr_model": ocr_model_default,
+                        "ocr_resize_to_1800": bool(OCR_RESIZE_TO_1800_DEFAULT),
+                        "catalog_provider": catalog_provider_default,
+                        "catalog_model": catalog_model_default,
+                    },
                     timeout=600.0,
                 )
-                st.success("OCR relanzado desde workflow")
+                stage_label = STAGE_LABELS.get(str(retry_stage), str(retry_stage))
+                st.success(f"Workflow relanzado desde {stage_label}")
                 st.rerun()
             except requests.exceptions.ReadTimeout:
-                st.error("Timeout relanzando OCR")
+                st.error("Timeout relanzando workflow")
             except Exception as exc:
-                st.error(f"No se pudo relanzar OCR: {exc}")
+                st.error(f"No se pudo relanzar workflow: {exc}")
 else:
     st.info("Este libro no esta en estado review.")
 

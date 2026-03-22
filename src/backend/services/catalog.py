@@ -27,6 +27,46 @@ Eres un asistente experto en bibliografía. Tu tarea es extraer información pre
 5. Los campos de países y de entidades o nombres comunes, categoría, género... en español.
 6. Devuelve nulo si no está claro, incluso en los campos con lista cerrada de opciones.
 
+🔒 **Contrato estricto de campos cerrados (obligatorio)**:
+- Para estos campos solo se permiten valores literales exactos de la lista o `null`.
+- No uses sinónimos, variantes ortográficas, abreviaturas, traducciones ni pluralizaciones.
+- Si el valor inferido no coincide exactamente con una opción, devuelve `null`.
+
+Campos cerrados:
+- `edicion` (lista de 0..2 elementos, sin duplicados):
+  - "1ª edición"
+  - "2ª edición"
+  - "3ª edición"
+  - "4ª edición"
+  - "5ª edición o posteriores"
+  - "Edición especial"
+  - "Edición limitada"
+  - "Edición ilustrada"
+  - "Edición internacional"
+  - "Edición para el profesor"
+- `numero_impresion` (un único valor o `null`):
+  - "1ª impresión"
+  - "2ª impresión"
+  - "3ª impresión"
+  - "4ª impresión"
+  - "5ª impresión o posteriores"
+- `ilustraciones` (un único valor o `null`):
+  - "Contiene ilustraciones"
+  - "Ilustraciones en blanco y negro"
+  - "Profusamente ilustrado"
+  - "Profusamente ilustrado, en blanco y negro"
+- `encuadernacion` (un único valor o `null`):
+  - "Tapa dura"
+  - "Tapa blanda"
+  - "Sin encuadernación"
+
+🧭 **Categoría y género (lista sugerida, no cerrada)**:
+- Deben ir en español.
+- Si el valor coincide claramente con una sugerencia, usa exactamente ese literal (misma ortografía y forma).
+- Evita variantes como plural/singular innecesarias: usa "Ensayo", no "Ensayos".
+- No uses inglés si existe equivalente claro en español.
+- Si no hay equivalencia clara con las sugerencias, puedes proponer un término nuevo en español.
+
 📝 **Campos a completar**:
 - **ISBN** mejor el de 10 que el de 13. Solo caracteres alfanuméricos.
 - **Título** título de la obra.
@@ -39,8 +79,8 @@ Eres un asistente experto en bibliografía. Tu tarea es extraer información pre
 - **País de publicación**
 - **Año de publicación**
 - **Idioma**: nombre en español. Pueden ser varios.
-- **Edición** (elige como mucho dos de esta lista cerrada): 1ª edición, 2ª edición, 3ª edición, 4ª edición, 5.ª edición o posteriores, Edición especial, Edición ilustrada, Edición para el profesor, Edición del club del libro, Edición limitada, Edición internacional.
-- **Número de impresión o tirada**: una opción de esta lista cerrada: 1ª impresión, 2ª impresión, 3ª impresión, 4ª impresión, 5.ª impresión o posteriores.
+- **Edición** (0..2 valores, solo de lista cerrada).
+- **Número de impresión o tirada** (0..1 valor, solo de lista cerrada).
 - **Colección**: indicar el nombre si pertenece a una colección dentro de la editorial.
 - **Número en colección** el número dentro de la colección, si esta existe.
 - **Obra completa**. El nombre de la obra completa, si se trata de un volumen de la misma.
@@ -52,8 +92,8 @@ Eres un asistente experto en bibliografía. Tu tarea es extraer información pre
 - **Fotografía de** autor(es) de las fotografías que se incluyen, si las hay.
 - **Categoría**: es español. Lista de sugerencias Ensayo,Novela,Ciencia,Historia,Poesía,Cuentos,Guía,Teatro,Clásicos,Clásicos griegos y latinos,Epistolar,Libro juego,Manuales,Memorias,Cómic,Aforismos,Sociología,Tauromaquia,Biografía,Fotografía
 - **Género**: En español. Lista de sugerencias Ciencia ficción,Geología,Fantasía,Filosofía,Policíaco,Estudios literarios, etc. (cualquier campo temático)
-- **Contiene ilustraciones**. Lista cerrada: "No", "Contiene ilustraciones", "Profusamente ilustrado", "Ilustraciones en blanco y negro".
-- **Encuadernación**. Lista cerrada: "Tapa dura", "Tapa blanda", "Sin encuadernación".
+- **Contiene ilustraciones** (0..1 valor, solo de lista cerrada).
+- **Encuadernación** (0..1 valor, solo de lista cerrada).
 - **Número de páginas**
 - **Palabras clave** En español. Alguna etiqueta temática distinta de los valores de género y categoría. Solo si el libro no tiene ISBN, incluye "NOISBN" como palabra clave.
 
@@ -72,8 +112,8 @@ Devuelve los datos en **JSON** con esta estructura:
   "pais_publicacion": str,
   "anio": int,
   "idioma": [str],
-  "edicion": [str],
-  "numero_impresion": str,
+  "edicion": [str] | null,
+  "numero_impresion": str | null,
   "coleccion": str,
   "numero_coleccion": int,
   "obra_completa": str,
@@ -85,12 +125,13 @@ Devuelve los datos en **JSON** con esta estructura:
   "fotografia_de": [str],
   "categoria": str,
   "genero": str,
-  "ilustraciones": str,
-  "encuadernacion": str,
+  "ilustraciones": str | null,
+  "encuadernacion": str | null,
   "paginas": int,
   "palabras_clave": [str]
 }}
 ```
+Devuelve solo JSON válido (sin markdown ni texto extra).
 """.strip()
 
 

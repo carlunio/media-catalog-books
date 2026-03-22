@@ -5,12 +5,20 @@ from typing import Any
 
 import requests
 
-from ..config import GOOGLE_BOOKS_MIN_INTERVAL_SECONDS, ISBNDB_API_KEY, REQUEST_TIMEOUT_SECONDS
+from ..config import (
+    GOOGLE_BOOKS_MIN_INTERVAL_SECONDS,
+    ISBNDB_API_KEY,
+    OPENLIBRARY_MIN_INTERVAL_SECONDS,
+    REQUEST_TIMEOUT_SECONDS,
+)
 from ..normalizers import clean_isbn, is_valid_isbn
 from . import books
 
-_GOOGLE_RATE_LOCK = Lock()
-_google_next_call_monotonic = 0.0
+_RATE_LOCK = Lock()
+_last_call_monotonic_by_provider: dict[str, float] = {
+    "google": 0.0,
+    "open_library": 0.0,
+}
 
 
 def _safe_get(url: str, *, headers: dict[str, str] | None = None, timeout: float = REQUEST_TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -20,26 +28,27 @@ def _safe_get(url: str, *, headers: dict[str, str] | None = None, timeout: float
     return payload if isinstance(payload, dict) else {}
 
 
-def _wait_for_google_slot() -> None:
-    interval = float(GOOGLE_BOOKS_MIN_INTERVAL_SECONDS or 0.0)
+def _wait_for_provider_slot(provider: str, *, min_interval_seconds: float) -> None:
+    interval = float(min_interval_seconds or 0.0)
     if interval <= 0:
         return
 
-    global _google_next_call_monotonic
+    provider_key = str(provider or "").strip().lower() or "unknown"
 
     while True:
-        with _GOOGLE_RATE_LOCK:
+        with _RATE_LOCK:
             now = time.monotonic()
-            wait_seconds = _google_next_call_monotonic - now
+            last_call = float(_last_call_monotonic_by_provider.get(provider_key, 0.0) or 0.0)
+            wait_seconds = interval - (now - last_call)
             if wait_seconds <= 0:
-                _google_next_call_monotonic = now + interval
+                _last_call_monotonic_by_provider[provider_key] = now
                 return
 
         time.sleep(min(wait_seconds, 1.0))
 
 
 def _google_books(isbn: str, *, timeout: float) -> dict[str, Any]:
-    _wait_for_google_slot()
+    _wait_for_provider_slot("google", min_interval_seconds=GOOGLE_BOOKS_MIN_INTERVAL_SECONDS)
     data = _safe_get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}", timeout=timeout)
     items = data.get("items") if isinstance(data, dict) else None
     if isinstance(items, list) and items:
@@ -51,6 +60,7 @@ def _google_books(isbn: str, *, timeout: float) -> dict[str, Any]:
 
 
 def _open_library(isbn: str, *, timeout: float) -> dict[str, Any]:
+    _wait_for_provider_slot("open_library", min_interval_seconds=OPENLIBRARY_MIN_INTERVAL_SECONDS)
     data = _safe_get(
         f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data",
         timeout=timeout,

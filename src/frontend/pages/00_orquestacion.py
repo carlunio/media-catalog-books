@@ -4,11 +4,22 @@ import streamlit as st
 try:
     from src.frontend.utils import (
         API_URL,
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         WORKFLOW_STAGES,
         api_get,
         api_post,
         configure_page,
         load_ollama_models,
+        render_ollama_model_selector,
+        seed_widget_once,
         scope_params,
         select_module_scope,
         show_backend_status,
@@ -16,11 +27,22 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     from frontend.utils import (
         API_URL,
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+        CATALOG_OPENAI_MODEL_DEFAULT,
+        CATALOG_PROVIDER_DEFAULT,
+        OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
+        OCR_OPENAI_MODEL_DEFAULT,
+        OCR_PROVIDER_DEFAULT,
+        OCR_RESIZE_TO_1800_DEFAULT,
         WORKFLOW_STAGES,
         api_get,
         api_post,
         configure_page,
         load_ollama_models,
+        render_ollama_model_selector,
+        seed_widget_once,
         scope_params,
         select_module_scope,
         show_backend_status,
@@ -52,19 +74,43 @@ with st.expander("Definicion del grafo", expanded=False):
 
 st.subheader("Ejecucion del pipeline")
 
+STAGE_INDEX = {stage_name: idx for idx, stage_name in enumerate(WORKFLOW_STAGES)}
+
 col1, col2, col3, col4 = st.columns([1.2, 1, 1, 1])
 with col1:
     selected_id = st.text_input("Book ID (opcional)", value="", placeholder="03B0001")
 with col2:
-    start_stage = st.selectbox("Desde", WORKFLOW_STAGES, index=0)
+    start_stage_key = "orq_start_stage"
+    if start_stage_key not in st.session_state:
+        st.session_state[start_stage_key] = WORKFLOW_STAGES[0]
+    start_stage = st.selectbox("Desde", WORKFLOW_STAGES, key=start_stage_key)
 with col3:
     stop_options = ["(sin limite)"] + list(WORKFLOW_STAGES)
-    stop_after = st.selectbox("Parar en", stop_options, index=0)
+    stop_after_key = "orq_stop_after"
+    prev_start_key = "orq_prev_start_stage"
+    previous_start = str(st.session_state.get(prev_start_key) or "").strip()
+    if stop_after_key not in st.session_state:
+        st.session_state[stop_after_key] = start_stage
+    elif previous_start != start_stage:
+        # When start stage changes, default stop stage to the same stage.
+        st.session_state[stop_after_key] = start_stage
+    if st.session_state.get(stop_after_key) not in stop_options:
+        st.session_state[stop_after_key] = start_stage
+    stop_after = st.selectbox("Parar en", stop_options, key=stop_after_key)
+    st.session_state[prev_start_key] = start_stage
 with col4:
     st.caption("El limite de lote depende de la etapa y overwrite")
 
 overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
 max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
+
+start_idx = STAGE_INDEX.get(start_stage, 0)
+stop_idx = len(WORKFLOW_STAGES) - 1 if stop_after == "(sin limite)" else STAGE_INDEX.get(stop_after, start_idx)
+if stop_idx < start_idx:
+    stop_idx = start_idx
+
+ocr_in_flow = STAGE_INDEX["ocr"] >= start_idx and STAGE_INDEX["ocr"] <= stop_idx
+catalog_in_flow = STAGE_INDEX["catalog"] >= start_idx and STAGE_INDEX["catalog"] <= stop_idx
 
 eligible_limit: int | None = None
 if not overwrite:
@@ -101,12 +147,18 @@ else:
         )
 
 col_provider, col_model = st.columns([1, 2])
-default_ocr_ollama_model = "glm-ocr:latest"
-default_catalog_ollama_model = "qwen2.5:14b"
-default_catalog_openai_model = "gpt-4o-mini"
 with col_provider:
-    st.text_input("OCR provider", value="ollama", disabled=True)
-    ocr_provider = "ollama"
+    ocr_provider_options = ["openai", "ollama"]
+    ocr_provider_index = 0
+    if OCR_PROVIDER_DEFAULT in ocr_provider_options:
+        ocr_provider_index = ocr_provider_options.index(OCR_PROVIDER_DEFAULT)
+    seed_widget_once("orq_ocr_provider", ocr_provider_options[ocr_provider_index])
+    ocr_provider = st.selectbox(
+        "OCR provider",
+        ocr_provider_options,
+        key="orq_ocr_provider",
+        disabled=not ocr_in_flow,
+    )
 with col_model:
     try:
         ollama_models = load_ollama_models()
@@ -114,35 +166,73 @@ with col_model:
         ollama_models = []
         st.warning(f"No se pudieron cargar modelos de Ollama: {exc}")
 
-    options = [default_ocr_ollama_model] + [name for name in ollama_models if name != default_ocr_ollama_model]
-    if len(options) > 1:
-        ocr_model = st.selectbox("Modelo OCR", options, index=0)
+    if ocr_provider == "ollama":
+        ocr_model = render_ollama_model_selector(
+            label="Modelo OCR",
+            key="orq_ocr_model_ollama",
+            installed_models=ollama_models,
+            default_model=OCR_OLLAMA_MODEL_DEFAULT,
+            suggested_models=OCR_OLLAMA_MODEL_SUGGESTIONS,
+            disabled=not ocr_in_flow,
+        )
     else:
-        ocr_model = st.text_input("Modelo OCR", value=default_ocr_ollama_model, placeholder=default_ocr_ollama_model)
+        seed_widget_once("orq_ocr_model_openai", OCR_OPENAI_MODEL_DEFAULT)
+        ocr_model = st.text_input(
+            "Modelo OCR",
+            placeholder=OCR_OPENAI_MODEL_DEFAULT,
+            key="orq_ocr_model_openai",
+            disabled=not ocr_in_flow,
+        )
+
+    seed_widget_once("orq_ocr_resize_to_1800", OCR_RESIZE_TO_1800_DEFAULT)
+    ocr_resize_to_1800 = st.checkbox(
+        "Reducir imagen a 1800 px (solo para glm-ocr)",
+        key="orq_ocr_resize_to_1800",
+        help="Si esta activo y el modelo OCR empieza por 'glm-ocr', se redimensiona la imagen al lado maximo 1800.",
+        disabled=not ocr_in_flow,
+    )
+    if not ocr_in_flow:
+        st.caption("OCR fuera del rango seleccionado; configuración desactivada.")
 
 st.caption("Configuracion de catalogacion automatica")
 cat_col_a, cat_col_b = st.columns([1, 2])
 with cat_col_a:
-    catalog_provider = st.selectbox("Provider catalogo", ["openai", "ollama"], index=0)
+    catalog_provider_options = ["openai", "ollama"]
+    catalog_provider_index = 0
+    if CATALOG_PROVIDER_DEFAULT in catalog_provider_options:
+        catalog_provider_index = catalog_provider_options.index(CATALOG_PROVIDER_DEFAULT)
+    seed_widget_once("orq_catalog_provider", catalog_provider_options[catalog_provider_index])
+    catalog_provider = st.selectbox(
+        "Provider catalogo",
+        catalog_provider_options,
+        key="orq_catalog_provider",
+        disabled=not catalog_in_flow,
+    )
 with cat_col_b:
     if catalog_provider == "ollama":
-        catalog_options = [default_catalog_ollama_model] + [
-            name for name in ollama_models if name != default_catalog_ollama_model
-        ]
-        if len(catalog_options) > 1:
-            catalog_model = st.selectbox("Modelo catalogo", catalog_options, index=0)
-        else:
-            catalog_model = st.text_input(
-                "Modelo catalogo",
-                value=default_catalog_ollama_model,
-                placeholder=default_catalog_ollama_model,
-            )
+        catalog_model = render_ollama_model_selector(
+            label="Modelo catalogo",
+            key="orq_catalog_model_ollama",
+            installed_models=ollama_models,
+            default_model=CATALOG_OLLAMA_MODEL_DEFAULT,
+            suggested_models=CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+            disabled=not catalog_in_flow,
+        )
     else:
+        seed_widget_once("orq_catalog_model_openai", CATALOG_OPENAI_MODEL_DEFAULT)
         catalog_model = st.text_input(
             "Modelo catalogo",
-            value=default_catalog_openai_model,
-            placeholder=default_catalog_openai_model,
+            placeholder=CATALOG_OPENAI_MODEL_DEFAULT,
+            key="orq_catalog_model_openai",
+            disabled=not catalog_in_flow,
         )
+if not catalog_in_flow:
+    st.caption("Catalogación fuera del rango seleccionado; configuración desactivada.")
+
+if ocr_in_flow:
+    st.caption(f"OCR efectivo (si no tocas nada): `{ocr_provider}` / `{ocr_model}`")
+if catalog_in_flow:
+    st.caption(f"Catalog efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`")
 
 if st.button("Ejecutar workflow", type="primary"):
     if not overwrite and int(limit) <= 0:
@@ -159,9 +249,10 @@ if st.button("Ejecutar workflow", type="primary"):
         "overwrite": bool(overwrite),
         "max_attempts": int(max_attempts),
         "ocr_provider": ocr_provider,
-        "ocr_model": ocr_model.strip() or None,
-        "catalog_provider": catalog_provider,
-        "catalog_model": catalog_model.strip() or None,
+        "ocr_model": (ocr_model.strip() or None) if ocr_in_flow else None,
+        "ocr_resize_to_1800": bool(ocr_resize_to_1800) if ocr_in_flow else False,
+        "catalog_provider": catalog_provider if catalog_in_flow else None,
+        "catalog_model": (catalog_model.strip() or None) if catalog_in_flow else None,
     }
     try:
         result = api_post("/workflow/run", json=payload, timeout=1800.0)
@@ -206,6 +297,43 @@ with st.expander("Detalle de estados", expanded=False):
     st.write("Running nodes")
     st.dataframe(pd.DataFrame([running_nodes]), width="stretch", hide_index=True)
 
+st.subheader("Items en running")
+running_total = int(stage_counts.get("running", 0))
+if running_total > 0:
+    try:
+        running_rows = api_get(
+            "/books",
+            params={"limit": 5000, **scope_params(scope_block, scope_module)},
+            timeout=20.0,
+        )
+        running_items = [
+            row
+            for row in running_rows
+            if str(row.get("workflow_status") or "").strip().lower() == "running"
+        ]
+        if running_items:
+            running_table = []
+            for row in running_items:
+                node = str(row.get("workflow_current_node") or "").strip()
+                stage = str(row.get("pipeline_stage") or "").strip()
+                running_table.append(
+                    {
+                        "id": str(row.get("id") or ""),
+                        "nodo": node or "(sin nodo)",
+                        "etapa": stage or "(sin etapa)",
+                        "accion": f"Ejecutando {node}" if node else "Ejecutando workflow",
+                        "attempt": int(row.get("workflow_attempt") or 0),
+                        "updated_at": row.get("updated_at"),
+                    }
+                )
+            st.dataframe(pd.DataFrame(running_table), width="stretch", hide_index=True)
+        else:
+            st.info("No hay items en running ahora mismo.")
+    except Exception as exc:
+        st.error(f"No se pudo cargar el detalle de running: {exc}")
+else:
+    st.success("No hay items en running.")
+
 review_queue = snapshot.get("review_queue", [])
 st.subheader("Cola de revision")
 
@@ -236,6 +364,7 @@ if review_queue:
                 payload = {"action": action, "max_attempts": int(max_attempts)}
                 payload["ocr_provider"] = ocr_provider
                 payload["ocr_model"] = ocr_model.strip() or None
+                payload["ocr_resize_to_1800"] = bool(ocr_resize_to_1800)
                 payload["catalog_provider"] = catalog_provider
                 payload["catalog_model"] = catalog_model.strip() or None
                 result = api_post(f"/workflow/review/{selected_review_id}", json=payload, timeout=600.0)

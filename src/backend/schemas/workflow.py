@@ -26,6 +26,7 @@ class WorkflowRunRequest(BaseModel):
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
+    ocr_resize_to_1800: bool | None = None
     catalog_provider: CatalogProvider | None = None
     catalog_model: str | None = None
 
@@ -35,6 +36,7 @@ class WorkflowReviewRequest(BaseModel):
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
+    ocr_resize_to_1800: bool | None = None
     catalog_provider: CatalogProvider | None = None
     catalog_model: str | None = None
 

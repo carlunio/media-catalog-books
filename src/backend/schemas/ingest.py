@@ -24,6 +24,7 @@ class RunOcrRequest(BaseModel):
     overwrite: bool = False
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
+    ocr_resize_to_1800: bool | None = None
 
 
 class RunMetadataRequest(BaseModel):

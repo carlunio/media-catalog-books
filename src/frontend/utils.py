@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import html
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,61 @@ THEME_APPLIED_KEY = "_ui_theme_applied"
 THEME_CSS_ENV_VAR = "FRONTEND_THEME_CSS"
 DEFAULT_THEME_CSS_PATH = Path(__file__).resolve().parent / "assets" / "theme.css"
 APP_ICON_PATH = Path(__file__).resolve().parents[2] / "assets" / "dani.png"
+
+
+def _normalize_provider(value: str | None, *, fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"openai", "ollama"}:
+        return text
+    return fallback
+
+
+def _as_csv_models(value: str | None, *, default: list[str]) -> list[str]:
+    text = str(value or "").strip()
+    source = [chunk.strip() for chunk in text.split(",")] if text else list(default)
+    output: list[str] = []
+    for item in source:
+        candidate = str(item or "").strip()
+        if candidate and candidate not in output:
+            output.append(candidate)
+    return output
+
+
+def _as_bool(value: str | None, *, fallback: bool) -> bool:
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return fallback
+
+
+OCR_PROVIDER_DEFAULT = _normalize_provider(os.getenv("OCR_PROVIDER"), fallback="ollama")
+OCR_OPENAI_MODEL_DEFAULT = str(os.getenv("OCR_OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini").strip()
+OCR_OLLAMA_MODEL_DEFAULT = str(os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest") or "glm-ocr:latest").strip()
+OCR_RESIZE_TO_1800_DEFAULT = _as_bool(os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), fallback=True)
+
+CATALOG_PROVIDER_DEFAULT = _normalize_provider(os.getenv("CATALOG_PROVIDER"), fallback="openai")
+CATALOG_MODEL_DEFAULT = str(os.getenv("CATALOG_MODEL", "gpt-4o-mini") or "gpt-4o-mini").strip()
+CATALOG_OPENAI_MODEL_DEFAULT = str(os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL_DEFAULT) or CATALOG_MODEL_DEFAULT).strip()
+CATALOG_OLLAMA_MODEL_DEFAULT = str(os.getenv("CATALOG_OLLAMA_MODEL", "qwen2.5:14b") or "qwen2.5:14b").strip()
+
+OCR_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
+    os.getenv("OCR_OLLAMA_MODEL_SUGGESTIONS"),
+    default=[OCR_OLLAMA_MODEL_DEFAULT, "glm-ocr:latest", "glm-ocr"],
+)
+CATALOG_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
+    os.getenv("CATALOG_OLLAMA_MODEL_SUGGESTIONS"),
+    default=[CATALOG_OLLAMA_MODEL_DEFAULT, "qwen2.5:14b", "qwen3:14b", "qwen2.5:7b", "llama3.1:8b"],
+)
+
+
+def seed_widget_once(key: str, value: Any) -> None:
+    marker = f"__seeded__{key}"
+    if st.session_state.get(marker):
+        return
+    st.session_state[key] = value
+    st.session_state[marker] = True
 
 
 def _resolve_theme_css_path() -> Path:
@@ -101,6 +157,12 @@ def api_get(path: str, *, timeout: float | None = 120.0, **kwargs) -> Any:
     response = requests.get(_url(path), timeout=timeout, **kwargs)
     response.raise_for_status()
     return response.json()
+
+
+def api_get_bytes(path: str, *, timeout: float | None = 120.0, **kwargs) -> bytes:
+    response = requests.get(_url(path), timeout=timeout, **kwargs)
+    response.raise_for_status()
+    return response.content
 
 
 def api_post(path: str, *, timeout: float | None = 120.0, **kwargs) -> Any:
@@ -295,3 +357,107 @@ def load_ollama_models() -> list[str]:
 
     cleaned = [str(item).strip() for item in models if str(item).strip()]
     return sorted(set(cleaned))
+
+
+def render_ollama_model_selector(
+    *,
+    label: str,
+    key: str,
+    installed_models: list[str],
+    default_model: str,
+    suggested_models: list[str] | None = None,
+    disabled: bool = False,
+) -> str:
+    options = [str(item).strip() for item in installed_models if str(item).strip()]
+    options = sorted(set(options))
+
+    default_text = str(default_model or "").strip()
+    selected = default_text
+
+    def _match_default(value: str, candidates: list[str]) -> str | None:
+        if not value:
+            return None
+        if value in candidates:
+            return value
+        lower_map = {item.lower(): item for item in candidates}
+        if value.lower() in lower_map:
+            return lower_map[value.lower()]
+
+        # Common OCR/Catalog aliasing: `model` <-> `model:latest`
+        if ":" not in value:
+            latest = f"{value}:latest"
+            if latest in candidates:
+                return latest
+            if latest.lower() in lower_map:
+                return lower_map[latest.lower()]
+        if value.endswith(":latest"):
+            base = value[: -len(":latest")]
+            if base in candidates:
+                return base
+            if base.lower() in lower_map:
+                return lower_map[base.lower()]
+        return None
+
+    if options:
+        matched_default = _match_default(default_text, options)
+        display_options = list(options)
+        if default_text and matched_default is None and default_text not in display_options:
+            # Keep .env value visible and selected even if not installed.
+            display_options = [default_text, *display_options]
+
+        preferred = matched_default or default_text or (display_options[0] if display_options else "")
+        if preferred and preferred not in display_options:
+            preferred = display_options[0]
+
+        seed_widget_once(key, preferred)
+        selected = str(st.selectbox(label, display_options, key=key, disabled=disabled) or "").strip()
+        if default_text and selected == default_text and matched_default is None:
+            st.caption(
+                f"Modelo desde `.env`: `{default_text}` (no detectado como instalado en backend). "
+                "Si ejecutas sin tocar nada, se usará este valor."
+            )
+    else:
+        seed_widget_once(key, "(sin modelos Ollama instalados en backend)")
+        st.selectbox(
+            label,
+            options=["(sin modelos Ollama instalados en backend)"],
+            index=0,
+            key=key,
+            disabled=True,
+        )
+        st.caption("No hay modelos Ollama instalados detectables en el backend.")
+
+    suggestions = [str(item).strip() for item in (suggested_models or []) if str(item).strip()]
+    if suggestions:
+        ordered: list[str] = []
+        for item in suggestions:
+            if item not in ordered:
+                ordered.append(item)
+        installed_set = set(options)
+
+        chips: list[str] = []
+        for model_name in ordered:
+            escaped = html.escape(model_name)
+            if model_name in installed_set:
+                chips.append(
+                    "<span style='display:inline-block;padding:0.15rem 0.5rem;border:1px solid #5b7280;"
+                    "border-radius:999px;background:#eaf4fb;color:#29414e;font-size:0.82rem;'>"
+                    f"{escaped}</span>"
+                )
+            else:
+                chips.append(
+                    "<span style='display:inline-block;padding:0.15rem 0.5rem;border:1px solid #9daab2;"
+                    "border-radius:999px;background:#eef1f3;color:#7a8892;font-size:0.82rem;opacity:0.65;"
+                    "cursor:not-allowed;'>"
+                    f"{escaped}</span>"
+                )
+
+        st.caption("Sugerencias Ollama (gris = no instalado, no seleccionable)")
+        st.markdown(
+            "<div style='display:flex;flex-wrap:wrap;gap:0.35rem 0.4rem;align-items:center;'>"
+            + "".join(chips)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+
+    return selected

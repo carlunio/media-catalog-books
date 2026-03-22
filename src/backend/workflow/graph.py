@@ -33,6 +33,7 @@ class WorkflowState(TypedDict, total=False):
     overwrite: bool
     ocr_provider: str | None
     ocr_model: str | None
+    ocr_resize_to_1800: bool
     catalog_provider: str | None
     catalog_model: str | None
 
@@ -214,6 +215,7 @@ def _ocr_node(state: WorkflowState) -> WorkflowState:
         book_id,
         provider=state.get("ocr_provider"),
         model=state.get("ocr_model"),
+        resize_to_1800=bool(state.get("ocr_resize_to_1800")),
         overwrite=bool(state.get("overwrite")),
     )
     if str(result.get("status") or "").strip().lower() == "error":

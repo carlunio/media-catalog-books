@@ -1,9 +1,17 @@
+from datetime import datetime
 from pathlib import Path
+import time
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from .clients import ClientError, list_ollama_models
-from .config import CATALOG_PROVIDER, OCR_PROVIDER, WORKFLOW_MAX_ATTEMPTS
+from .config import (
+    CATALOG_PROVIDER,
+    OCR_PROVIDER,
+    OCR_RESIZE_TO_1800_DEFAULT,
+    WORKFLOW_MAX_ATTEMPTS,
+)
 from .normalizers import clean_isbn, is_valid_isbn
 from .schemas.ingest import (
     IngestRequest,
@@ -27,6 +35,47 @@ if _recovered_stale_runs:
 
 def _resolve_max_attempts(value: int | None) -> int:
     return WORKFLOW_MAX_ATTEMPTS if value is None else int(value)
+
+
+def _resolve_ocr_resize_to_1800(value: bool | None) -> bool:
+    return OCR_RESIZE_TO_1800_DEFAULT if value is None else bool(value)
+
+
+_TRANSIENT_DB_ERROR_TOKENS = (
+    "conflicting lock",
+    "write-write conflict",
+    "database is locked",
+    "transaction conflict",
+)
+
+
+def _is_transient_db_error(exc: Exception) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    return any(token in message for token in _TRANSIENT_DB_ERROR_TOKENS)
+
+
+def _update_ocr_with_retry(book_id: str, *, credits_text: str | None, isbn_raw: str | None, isbn: str | None, trace: dict) -> None:
+    attempts = 3
+    for attempt in range(attempts):
+        try:
+            books.update_ocr(
+                book_id,
+                credits_text=credits_text,
+                isbn_raw=isbn_raw,
+                isbn=isbn,
+                status="manual",
+                provider="manual",
+                model=None,
+                trace=trace,
+                error=None,
+            )
+            return
+        except Exception as exc:
+            if attempt == attempts - 1 or not _is_transient_db_error(exc):
+                raise
+            time.sleep(0.2 * (attempt + 1))
 
 
 @app.get("/health")
@@ -80,6 +129,7 @@ def workflow_run(payload: WorkflowRunRequest):
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
+            ocr_resize_to_1800=_resolve_ocr_resize_to_1800(payload.ocr_resize_to_1800),
             catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
             catalog_model=payload.catalog_model,
         )
@@ -141,6 +191,7 @@ def workflow_review_action(book_id: str, payload: WorkflowReviewRequest):
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
+            ocr_resize_to_1800=_resolve_ocr_resize_to_1800(payload.ocr_resize_to_1800),
             catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
             catalog_model=payload.catalog_model,
         )
@@ -180,6 +231,7 @@ def run_ocr(payload: RunOcrRequest):
             max_attempts=WORKFLOW_MAX_ATTEMPTS,
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
+            ocr_resize_to_1800=_resolve_ocr_resize_to_1800(payload.ocr_resize_to_1800),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -316,17 +368,25 @@ def update_book_ocr(book_id: str, payload: UpdateOcrRequest):
         },
     }
 
-    books.update_ocr(
-        book_id,
-        credits_text=credits_text,
-        isbn_raw=isbn_raw_value,
-        isbn=final_isbn,
-        status="manual",
-        provider="manual",
-        model=None,
-        trace=trace,
-        error=None,
-    )
+    try:
+        _update_ocr_with_retry(
+            book_id,
+            credits_text=credits_text,
+            isbn_raw=isbn_raw_value,
+            isbn=final_isbn,
+            trace=trace,
+        )
+    except Exception as exc:
+        if _is_transient_db_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "DuckDB busy or write conflict while saving OCR/ISBN. "
+                    "Try again in a few seconds."
+                ),
+            ) from exc
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     return {
         "ok": True,
         "isbn": final_isbn,
@@ -378,6 +438,14 @@ def bootstrap_core_books(block: str | None = None, module: str | None = None, li
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/core-books/{book_id}/sync")
+def sync_core_book(book_id: str, force_overwrite: bool = True):
+    item = books.sync_core_book_from_catalog(book_id, force_overwrite=bool(force_overwrite))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Core book not found")
+    return {"ok": True, "book": item, "force_overwrite": bool(force_overwrite)}
+
+
 @app.get("/core-books/options")
 def core_books_options():
     return {"allowed_values": books.get_books_allowed_values()}
@@ -414,8 +482,81 @@ def update_core_book(book_id: str, payload: UpdateCoreBookRequest):
     return {"ok": True, "book": item}
 
 
+@app.get("/export/books/txt")
 @app.get("/export/books/tsv")
-def export_tsv():
-    output = Path("exports/books.tsv")
-    path = export.export_books_tsv(output)
-    return {"ok": True, "path": str(path)}
+def export_txt(
+    block: str | None = None,
+    modules: str | None = None,
+    encoding: str = "windows-1252",
+):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("data/output/exports")
+    output = output_dir / f"books_{timestamp}.txt"
+    try:
+        result = export.export_books_tsv(
+            output,
+            block=block,
+            modules=modules,
+            encoding=encoding,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "path": str(result["path"]),
+        "filename": Path(str(result["path"])).name,
+        "rows": int(result["rows"]),
+        "encoding": str(result["encoding"]),
+        "block": result.get("block"),
+        "prefixes": result.get("prefixes", []),
+    }
+
+
+@app.get("/export/books/file")
+def export_file(filename: str):
+    name = str(filename or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="filename is required")
+    if "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if not name.lower().endswith(".txt"):
+        raise HTTPException(status_code=400, detail="only .txt exports are allowed")
+
+    path = Path("data/output/exports") / name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="export file not found")
+
+    return FileResponse(
+        path=str(path),
+        media_type="text/plain",
+        filename=name,
+    )
+
+
+@app.get("/export/books/preview")
+def export_preview(
+    limit: int = 300,
+    block: str | None = None,
+    modules: str | None = None,
+):
+    if limit < 1 or limit > 50000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
+
+    try:
+        columns, rows, normalized_block, prefixes = export.query_export_rows(
+            block=block,
+            modules=modules,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "columns": columns,
+        "rows": rows,
+        "count": len(rows),
+        "block": normalized_block,
+        "prefixes": prefixes,
+    }

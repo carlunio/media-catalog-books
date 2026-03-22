@@ -159,6 +159,7 @@ def run_one(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    ocr_resize_to_1800: bool = False,
     catalog_provider: str | None = None,
     catalog_model: str | None = None,
 ) -> dict[str, Any]:
@@ -178,6 +179,7 @@ def run_one(
             "max_attempts": int(max_attempts),
             "ocr_provider": ocr_provider,
             "ocr_model": ocr_model,
+            "ocr_resize_to_1800": bool(ocr_resize_to_1800),
             "catalog_provider": catalog_provider,
             "catalog_model": catalog_model,
             "stop_pipeline": False,
@@ -237,6 +239,7 @@ def run_batch(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    ocr_resize_to_1800: bool = False,
     catalog_provider: str | None = None,
     catalog_model: str | None = None,
 ) -> dict[str, Any]:
@@ -304,6 +307,7 @@ def run_batch(
                 max_attempts=max_attempts,
                 ocr_provider=ocr_provider,
                 ocr_model=ocr_model,
+                ocr_resize_to_1800=ocr_resize_to_1800,
                 catalog_provider=catalog_provider,
                 catalog_model=catalog_model,
             )
@@ -340,6 +344,125 @@ def eligible_count(
     }
 
 
+def _review_origin_stage(book: dict[str, Any]) -> str | None:
+    node = str(book.get("workflow_current_node") or "").strip().lower()
+    reason = str(book.get("workflow_review_reason") or "").strip().lower()
+
+    if node.startswith("stage:"):
+        node = node.split(":", 1)[1].strip()
+    if node.startswith("retry_"):
+        node = node.split("_", 1)[1].strip()
+
+    for stage in ("ocr", "metadata", "catalog", "cover"):
+        if node == stage or node.startswith(f"{stage}_") or node.startswith(f"{stage}:"):
+            return stage
+
+    for stage in ("ocr", "metadata", "catalog", "cover"):
+        if reason.startswith(stage):
+            return stage
+
+    return None
+
+
+def _mark_stage_as_manually_approved(book: dict[str, Any], *, stage: str) -> None:
+    book_id = str(book.get("id") or "").strip()
+    if not book_id:
+        raise ValueError("Book id is missing")
+
+    if stage == "ocr":
+        trace_payload = book.get("ocr_trace")
+        if not isinstance(trace_payload, (dict, list)):
+            trace_payload = {}
+        books.update_ocr(
+            book_id,
+            credits_text=str(book.get("credits_text") or "").strip() or None,
+            isbn_raw=str(book.get("isbn_raw") or "").strip() or None,
+            isbn=str(book.get("isbn") or "").strip() or None,
+            status="manual",
+            provider=str(book.get("ocr_provider") or "").strip() or "manual",
+            model=str(book.get("ocr_model") or "").strip() or None,
+            trace=trace_payload,
+            error=None,
+        )
+        return
+
+    if stage == "metadata":
+        metadata_payload = book.get("metadata")
+        books.update_metadata(
+            book_id,
+            metadata=metadata_payload if isinstance(metadata_payload, dict) else {},
+            status="manual",
+            error=None,
+        )
+        return
+
+    if stage == "catalog":
+        catalog_payload = book.get("catalog")
+        books.update_catalog(
+            book_id,
+            catalog=catalog_payload if isinstance(catalog_payload, dict) else {},
+            status="manual",
+            error=None,
+        )
+        return
+
+    if stage == "cover":
+        books.update_cover(
+            book_id,
+            cover_path=str(book.get("cover_path") or "").strip() or None,
+            status="skipped",
+            error=None,
+        )
+        return
+
+    raise ValueError(f"Unsupported stage for manual approval: {stage}")
+
+
+def _approve_review_without_running(book_id: str) -> dict[str, Any]:
+    book = books.get_book(book_id)
+    if book is None:
+        raise ValueError("Book not found")
+
+    if not bool(book.get("workflow_needs_review")):
+        return {
+            "id": book_id,
+            "status": "skipped",
+            "reason": "Book is not in review state",
+            "pipeline_stage": book.get("pipeline_stage"),
+        }
+
+    origin_stage = _review_origin_stage(book)
+    if origin_stage:
+        _mark_stage_as_manually_approved(book, stage=origin_stage)
+
+    books.clear_workflow_review(book_id)
+    updated = books.get_book(book_id)
+    if updated is None:
+        return {
+            "id": book_id,
+            "status": "error",
+            "error": "Book disappeared after review approval",
+        }
+
+    target_stage = str(updated.get("pipeline_stage") or "").strip().lower()
+    if target_stage == "done":
+        books.set_workflow_done(book_id, node="review_approved")
+    elif target_stage and not target_stage.startswith("running"):
+        books.set_workflow_pending(book_id, node=f"stage:{target_stage}", reason=None)
+
+    final_book = books.get_book(book_id) or updated
+    return {
+        "id": book_id,
+        "status": "approved",
+        "origin_stage": origin_stage,
+        "target_stage": str(final_book.get("pipeline_stage") or "").strip().lower() or None,
+        "workflow_status": final_book.get("workflow_status"),
+        "workflow_current_node": final_book.get("workflow_current_node"),
+        "workflow_needs_review": final_book.get("workflow_needs_review"),
+        "workflow_review_reason": final_book.get("workflow_review_reason"),
+    }
+
+
 def review_action(
     book_id: str,
     *,
@@ -347,18 +470,21 @@ def review_action(
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
+    ocr_resize_to_1800: bool = False,
     catalog_provider: str | None = None,
     catalog_model: str | None = None,
 ) -> dict[str, Any]:
+    normalized = action.strip().lower()
+    if normalized == "approve":
+        return _approve_review_without_running(book_id)
+
     action_to_stage = {
-        "approve": "cover",
         "retry_from_ocr": "ocr",
         "retry_from_metadata": "metadata",
         "retry_from_catalog": "catalog",
         "retry_from_cover": "cover",
     }
 
-    normalized = action.strip().lower()
     stage = action_to_stage.get(normalized)
     if stage is None:
         raise ValueError(f"Invalid review action: {action}")
@@ -372,6 +498,7 @@ def review_action(
         max_attempts=max_attempts,
         ocr_provider=ocr_provider,
         ocr_model=ocr_model,
+        ocr_resize_to_1800=ocr_resize_to_1800,
         catalog_provider=catalog_provider,
         catalog_model=catalog_model,
     )

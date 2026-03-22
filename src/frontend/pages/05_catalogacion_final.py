@@ -129,7 +129,7 @@ selected_id = st.selectbox(
 set_selected_book_id(selected_id)
 
 current_index = ids.index(selected_id)
-nav_col_prev, nav_col_next, _ = st.columns([1, 1, 4])
+nav_col_prev, nav_col_next, nav_col_sync = st.columns([1, 1, 2])
 with nav_col_prev:
     if st.button("← Anterior", disabled=current_index == 0, use_container_width=True):
         st.session_state[selector_pending_key] = ids[current_index - 1]
@@ -138,6 +138,22 @@ with nav_col_next:
     if st.button("Siguiente →", disabled=current_index >= len(ids) - 1, use_container_width=True):
         st.session_state[selector_pending_key] = ids[current_index + 1]
         st.rerun()
+with nav_col_sync:
+    if st.button("Reiniciar este ítem desde catalogación automática", use_container_width=True):
+        try:
+            api_post(
+                f"/core-books/{selected_id}/sync",
+                params={"force_overwrite": "true"},
+                timeout=45.0,
+            )
+            st.session_state["core_catalog_autosave_error"] = ""
+            st.session_state["core_catalog_force_reload"] = True
+            st.session_state["core_catalog_flash_success"] = (
+                f"Registro {selected_id} resincronizado desde catalogación automática"
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo reiniciar el registro desde catalogación automática: {exc}")
 
 try:
     book = api_get(f"/core-books/{selected_id}", params={"bootstrap": "true"}, timeout=20.0)

@@ -1,6 +1,9 @@
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
+
+from PIL import Image
 
 try:
     from ollama import chat as ollama_chat  # type: ignore
@@ -201,12 +204,119 @@ def _ollama_chat_with_image(*, model: str, image_path: Path, prompt: str) -> str
     return text
 
 
-def _run_ocr_for_image(*, model: str, image_path: Path) -> str:
-    text = _ollama_chat_with_image(model=model, image_path=image_path, prompt=OCR_TEXT_PROMPT)
+def _is_glm_ocr_model(model: str | None) -> bool:
+    return str(model or "").strip().lower().startswith("glm-ocr")
+
+
+def _prepare_image_for_ocr(
+    *,
+    model: str,
+    image_path: Path,
+    resize_to_1800: bool,
+) -> tuple[Path, dict[str, Any], Path | None]:
+    preprocess: dict[str, Any] = {
+        "enabled": bool(resize_to_1800),
+        "model_is_glm_ocr": _is_glm_ocr_model(model),
+        "resized": False,
+        "original_image": str(image_path),
+        "prepared_image": str(image_path),
+    }
+
+    if not resize_to_1800:
+        preprocess["reason"] = "disabled"
+        return image_path, preprocess, None
+
+    if not _is_glm_ocr_model(model):
+        preprocess["reason"] = "model_not_glm_ocr"
+        return image_path, preprocess, None
+
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            preprocess["original_size"] = {"width": int(width), "height": int(height)}
+            max_side = max(width, height)
+            if max_side <= 1800:
+                preprocess["reason"] = "already_within_limit"
+                return image_path, preprocess, None
+
+            scale = 1800.0 / float(max_side)
+            new_size = (
+                max(1, int(round(width * scale))),
+                max(1, int(round(height * scale))),
+            )
+            try:
+                resample = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
+            except AttributeError:  # pragma: no cover
+                resample = Image.LANCZOS  # type: ignore[attr-defined]
+
+            resized = image.resize(new_size, resample)
+            suffix = image_path.suffix.lower()
+            if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+                suffix = ".jpg"
+
+            temp_file = tempfile.NamedTemporaryFile(prefix="ocr_glm_1800_", suffix=suffix, delete=False)
+            temp_path = Path(temp_file.name)
+            temp_file.close()
+
+            output = resized
+            if suffix in {".jpg", ".jpeg"}:
+                if output.mode not in {"RGB", "L"}:
+                    output = output.convert("RGB")
+                output.save(temp_path, format="JPEG", quality=95, optimize=True)
+            elif suffix == ".png":
+                output.save(temp_path, format="PNG")
+            elif suffix == ".webp":
+                if output.mode not in {"RGB", "L"}:
+                    output = output.convert("RGB")
+                output.save(temp_path, format="WEBP", quality=95)
+            elif suffix in {".tif", ".tiff"}:
+                output.save(temp_path, format="TIFF")
+            elif suffix == ".bmp":
+                if output.mode not in {"RGB", "L"}:
+                    output = output.convert("RGB")
+                output.save(temp_path, format="BMP")
+            else:
+                if output.mode not in {"RGB", "L"}:
+                    output = output.convert("RGB")
+                output.save(temp_path, format="JPEG", quality=95, optimize=True)
+
+            preprocess["resized"] = True
+            preprocess["reason"] = "resized_for_glm_ocr"
+            preprocess["prepared_image"] = str(temp_path)
+            preprocess["prepared_size"] = {"width": int(new_size[0]), "height": int(new_size[1])}
+            preprocess["max_side_limit"] = 1800
+            return temp_path, preprocess, temp_path
+    except Exception as exc:
+        preprocess["reason"] = "preprocess_failed"
+        preprocess["error"] = str(exc)
+        return image_path, preprocess, None
+
+
+def _run_ocr_for_image(
+    *,
+    model: str,
+    image_path: Path,
+    resize_to_1800: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    prepared_path, preprocess, temp_path = _prepare_image_for_ocr(
+        model=model,
+        image_path=image_path,
+        resize_to_1800=resize_to_1800,
+    )
+
+    try:
+        text = _ollama_chat_with_image(model=model, image_path=prepared_path, prompt=OCR_TEXT_PROMPT)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
     cleaned = text.strip()
     if not cleaned:
         raise ClientError("Provider returned empty OCR text")
-    return cleaned
+    return cleaned, preprocess
 
 
 def _extract_isbn_with_llm(credits_text: str, *, model: str) -> dict[str, Any]:
@@ -264,7 +374,12 @@ def _extract_isbn_with_llm(credits_text: str, *, model: str) -> dict[str, Any]:
     }
 
 
-def _ocr_with_model(model: str, image_paths: list[Path]) -> tuple[str, list[dict[str, Any]]]:
+def _ocr_with_model(
+    model: str,
+    image_paths: list[Path],
+    *,
+    resize_to_1800: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
     traces: list[dict[str, Any]] = []
     chunks: list[str] = []
 
@@ -277,7 +392,12 @@ def _ocr_with_model(model: str, image_paths: list[Path]) -> tuple[str, list[dict
         }
 
         try:
-            text = _run_ocr_for_image(model=model, image_path=path)
+            text, preprocess = _run_ocr_for_image(
+                model=model,
+                image_path=path,
+                resize_to_1800=resize_to_1800,
+            )
+            attempt["preprocess"] = preprocess
             if text:
                 chunks.append(text)
                 attempt["status"] = "ok"
@@ -397,6 +517,7 @@ def run_one(
     *,
     provider: str | None = None,
     model: str | None = None,
+    resize_to_1800: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     book = books.get_book(book_id)
@@ -435,7 +556,11 @@ def run_one(
     selected_model = str(model or OCR_OLLAMA_MODEL).strip() or OCR_OLLAMA_MODEL
     selected_isbn_model = str(OCR_ISBN_OLLAMA_MODEL).strip() or "gpt-oss:20b"
 
-    credits_text, traces = _ocr_with_model(selected_model, image_paths)
+    credits_text, traces = _ocr_with_model(
+        selected_model,
+        image_paths,
+        resize_to_1800=bool(resize_to_1800),
+    )
 
     if not credits_text:
         message = "All OCR provider attempts failed"
@@ -451,6 +576,8 @@ def run_one(
             "provider_requested": requested_provider,
             "provider": "ollama",
             "model": selected_model,
+            "resize_to_1800_requested": bool(resize_to_1800),
+            "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
             "ocr_attempts": compact_attempts,
         }
 
@@ -501,6 +628,8 @@ def run_one(
         "provider_requested": requested_provider,
         "provider": "ollama",
         "model": selected_model,
+        "resize_to_1800_requested": bool(resize_to_1800),
+        "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
         "ocr_attempts": compact_attempts,
         "isbn_extraction": compact_isbn,
     }
@@ -525,6 +654,8 @@ def run_one(
         "provider": "ollama",
         "model": selected_model,
         "isbn_model": selected_isbn_model,
+        "resize_to_1800_requested": bool(resize_to_1800),
+        "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
         "chars": len(credits_text),
         "isbn_valid": bool(isbn_value),
     }

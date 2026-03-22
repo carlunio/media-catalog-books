@@ -1,10 +1,11 @@
 import json
 import re
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from ..config import DEFAULT_COVERS_DIR
+from ..config import DEFAULT_COVERS_DIR, PROJECT_ROOT
 from ..database import get_connection
 from ..normalizers import extract_book_id_from_path, normalize_book_id, split_book_id
 
@@ -148,6 +149,7 @@ CORE_BOOKS_COLUMNS: tuple[str, ...] = (
 CORE_BOOKS_EDITABLE_COLUMNS: tuple[str, ...] = tuple(column for column in CORE_BOOKS_COLUMNS if column != "id")
 CORE_BOOKS_INT_FIELDS = {"numero_coleccion", "alto", "ancho", "fondo", "peso", "paginas", "cantidad"}
 CORE_BOOKS_DECIMAL_FIELDS = {"precio"}
+ISO_639_3_TAB_PATH = PROJECT_ROOT / "assets" / "iso-639-3.tab"
 
 
 def normalize_block(value: str | None) -> str | None:
@@ -330,6 +332,142 @@ def _iter_modules_from_structure(base: Path) -> list[tuple[str, str, Path]]:
     return modules
 
 
+@lru_cache(maxsize=1)
+def _load_langcodes_module() -> Any | None:
+    try:
+        import langcodes  # type: ignore
+    except Exception:
+        return None
+    return langcodes
+
+
+def _iso639_3_to_spanish_name(code: str | None) -> str | None:
+    text = str(code or "").strip().lower()
+    if len(text) != 3:
+        return None
+    if text == "mul":
+        return "múltiples idiomas"
+
+    langcodes = _load_langcodes_module()
+    if langcodes is None:
+        return None
+
+    try:
+        name = str(langcodes.Language.get(text).display_name("es") or "").strip()
+    except Exception:
+        return None
+
+    if not name:
+        return None
+    if name.lower() in {"unknown language", "idioma desconocido"}:
+        return None
+    return name.lower()
+
+
+def _ensure_iso_639_3_table(con: Any) -> None:
+    con.execute("CREATE SCHEMA IF NOT EXISTS ref")
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ref.iso_639_3 (
+            id VARCHAR PRIMARY KEY,
+            part2b VARCHAR,
+            part2t VARCHAR,
+            part1 VARCHAR,
+            scope VARCHAR,
+            language_type VARCHAR,
+            ref_name VARCHAR,
+            comment VARCHAR,
+            spa_name VARCHAR
+        )
+        """
+    )
+    con.execute("ALTER TABLE ref.iso_639_3 ADD COLUMN IF NOT EXISTS spa_name VARCHAR")
+    con.execute("ALTER TABLE ref.iso_639_3 ADD COLUMN IF NOT EXISTS language_type VARCHAR")
+
+    legacy_nombre_spa_exists = bool(
+        con.execute(
+            """
+            SELECT COUNT(*) > 0
+            FROM information_schema.columns
+            WHERE table_schema = 'ref'
+              AND table_name = 'iso_639_3'
+              AND lower(column_name) = 'nombre_spa'
+            """
+        ).fetchone()[0]
+    )
+    if legacy_nombre_spa_exists:
+        con.execute(
+            """
+            UPDATE ref.iso_639_3
+            SET spa_name = nombre_spa
+            WHERE (spa_name IS NULL OR trim(spa_name) = '')
+              AND nombre_spa IS NOT NULL
+              AND trim(nombre_spa) <> ''
+            """
+        )
+
+    # Reload from SIL table if available, preserving manual spa_name values by id.
+    if ISO_639_3_TAB_PATH.exists():
+        con.execute(
+            """
+            CREATE OR REPLACE TEMP TABLE _iso_prev AS
+            SELECT id, spa_name
+            FROM ref.iso_639_3
+            """
+        )
+        con.execute("DELETE FROM ref.iso_639_3")
+        con.execute(
+            """
+            INSERT INTO ref.iso_639_3 (
+                id, part2b, part2t, part1, scope, language_type, ref_name, comment, spa_name
+            )
+            SELECT
+                src.id,
+                src.part2b,
+                src.part2t,
+                src.part1,
+                src.scope,
+                src.language_type,
+                src.ref_name,
+                src.comment,
+                prev.spa_name
+            FROM (
+                SELECT
+                    Id AS id,
+                    Part2b AS part2b,
+                    Part2t AS part2t,
+                    Part1 AS part1,
+                    Scope AS scope,
+                    Language_Type AS language_type,
+                    Ref_Name AS ref_name,
+                    Comment AS comment
+                FROM read_csv_auto(?, delim='\t', header=true, all_varchar=true)
+            ) AS src
+            LEFT JOIN _iso_prev AS prev ON prev.id = src.id
+            """,
+            [str(ISO_639_3_TAB_PATH)],
+        )
+
+    rows = con.execute("SELECT id, spa_name FROM ref.iso_639_3").fetchall()
+    updates: list[tuple[str, str]] = []
+    for row in rows:
+        iso_id = str(row[0] or "").strip().lower()
+        spa_name = str(row[1] or "").strip()
+        if not iso_id or spa_name:
+            continue
+        inferred = _iso639_3_to_spanish_name(iso_id)
+        if inferred:
+            updates.append((inferred, iso_id))
+
+    if updates:
+        con.executemany(
+            "UPDATE ref.iso_639_3 SET spa_name = ? WHERE id = ?",
+            updates,
+        )
+
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ref_iso_639_3_spa_name ON ref.iso_639_3(spa_name)")
+
+
 def _create_books_core_schema(con: Any) -> None:
     con.execute(
         """
@@ -398,9 +536,7 @@ def _create_books_core_schema(con: Any) -> None:
     except Exception:
         pass
 
-    # ISO helper table is no longer used; keep schema clean.
-    con.execute("DROP TABLE IF EXISTS ref.iso_639_3")
-    con.execute("DROP TABLE IF EXISTS main.iso_639_3")
+    _ensure_iso_639_3_table(con)
 
     con.execute(
         """
@@ -470,7 +606,12 @@ def _create_books_core_schema(con: Any) -> None:
             b.isbn AS isbn,
             CASE
                 WHEN strpos(COALESCE(b.idioma, ''), ';') > 0 THEN 'MUL'
-                ELSE upper(idioma_es_a_iso639_3(b.idioma))
+                ELSE (
+                    SELECT upper(i.id)
+                    FROM ref.iso_639_3 AS i
+                    WHERE lower(trim(i.spa_name)) = lower(trim(b.idioma))
+                    LIMIT 1
+                )
             END AS language,
             b.tipo_articulo AS producttype,
             b.encuadernacion AS bindingtext,
@@ -2252,7 +2393,7 @@ def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> di
     }
 
 
-def sync_core_book_from_catalog(book_id: str) -> dict[str, Any] | None:
+def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) -> dict[str, Any] | None:
     normalized_id = normalize_book_id(book_id)
     if not normalized_id:
         return None
@@ -2285,9 +2426,12 @@ def sync_core_book_from_catalog(book_id: str) -> dict[str, Any] | None:
             for column, value in values.items():
                 if column == "id":
                     continue
+                current = existing.get(column)
+                if bool(force_overwrite):
+                    updates[column] = value
+                    continue
                 if value in (None, ""):
                     continue
-                current = existing.get(column)
                 if current in (None, ""):
                     updates[column] = value
 
