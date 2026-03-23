@@ -298,7 +298,7 @@ def scope_params(block: str, module: str | None) -> dict[str, str]:
     return {"block": str(block).strip().upper(), "module": module_text.zfill(2)}
 
 
-def select_module_scope(*, key_prefix: str, title: str = "Modulo activo") -> tuple[str, str | None]:
+def select_module_scope(*, key_prefix: str, title: str = "Módulo activo") -> tuple[str, str | None]:
     current_block, current_module = get_selected_scope()
 
     st.caption(title)
@@ -317,20 +317,20 @@ def select_module_scope(*, key_prefix: str, title: str = "Modulo activo") -> tup
         if available_modules:
             default_module = current_module if current_module in available_modules else available_modules[0]
             module = st.selectbox(
-                "Modulo",
+                "Módulo",
                 available_modules,
                 index=available_modules.index(default_module),
                 key=f"{key_prefix}_module",
             )
         else:
             module = None
-            st.caption("Sin modulos disponibles")
+            st.caption("Sin módulos disponibles")
 
     selected_block, selected_module = set_selected_scope(block, module)
 
     if not selected_module:
         st.warning(
-            f"No hay carpetas de modulo (01..99) para el bloque {selected_block} en "
+            f"No hay carpetas de módulo (01..99) para el bloque {selected_block} en "
             f"{_covers_root() / selected_block}."
         )
 

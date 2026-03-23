@@ -54,8 +54,8 @@ STAGE_LABELS = {
     "cover": "Cover",
 }
 
-configure_page("Revision OCR | Media Catalog Books")
-st.title("Fase 2 · Revision OCR e ISBN")
+configure_page("Revisión OCR | Media Catalog Books")
+st.title("Fase 2 · Revisión OCR e ISBN")
 show_backend_status()
 
 
@@ -289,7 +289,7 @@ def _queue_form_patch(
         st.session_state[f"ocr_review_pending_patch_{book_id}"] = patch
 
 
-scope_block, scope_module = select_module_scope(key_prefix="review_scope", title="Modulo de trabajo")
+scope_block, scope_module = select_module_scope(key_prefix="review_scope", title="Módulo de trabajo")
 if not scope_module:
     st.stop()
 
@@ -312,7 +312,7 @@ filter_mode = st.segmented_control(
 if filter_mode is None:
     filter_mode = "all"
 
-limit = st.number_input("Limite", min_value=1, max_value=5000, value=1200)
+limit = st.number_input("Límite", min_value=1, max_value=5000, value=1200)
 
 try:
     rows = api_get(
@@ -325,7 +325,7 @@ except Exception as exc:
     st.stop()
 
 if not rows:
-    st.info("No hay libros para el modulo seleccionado.")
+    st.info("No hay libros para el módulo seleccionado.")
     st.stop()
 
 filtered_rows = _filter_rows(rows, str(filter_mode))
@@ -507,7 +507,7 @@ with right:
                 isbn_value = str(result.get("isbn") or "").strip()
                 isbn_raw_value = str(result.get("isbn_raw") or "").strip()
                 _queue_form_patch(selected_id, isbn_raw=isbn_raw_value, isbn=isbn_value)
-                with st.expander("Resultado de consolidacion ISBN", expanded=False):
+                with st.expander("Resultado de consolidación ISBN", expanded=False):
                     st.json(result)
             st.rerun()
         except Exception as exc:
@@ -517,7 +517,7 @@ st.divider()
 st.subheader("Acciones de review")
 
 if bool(book.get("workflow_needs_review")):
-    st.warning(str(book.get("workflow_review_reason") or "Requiere revision manual"))
+    st.warning(str(book.get("workflow_review_reason") or "Requiere revisión manual"))
     origin_stage = _review_origin_stage(book)
 
     if origin_stage:

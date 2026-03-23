@@ -1,27 +1,42 @@
 # media-catalog-books
 
-Refactor de `book_catalog_v0.3` a arquitectura estandarizada con:
+Aplicación para catalogación de libros con flujo por módulos (bloque + módulo),
+con backend API, orquestación de etapas, revisión manual y exportación final.
 
-- `FastAPI` (backend de servicios)
-- `LangGraph` (orquestacion de pipeline)
-- `DuckDB` (persistencia)
-- `Streamlit` (frontend operativo multipagina)
+## Estado del proyecto
 
-## Pipeline
+Este README documenta solo el estado actual del proyecto.
 
-1. Ingesta de imagenes de creditos (desde carpeta)
-2. OCR + extraccion ISBN
-3. Enriquecimiento de metadatos (Google Books, Open Library, ISBNdb)
-4. Consolidacion de ficha catalografica
-5. Descarga de portada final
-6. Exportacion TSV
+- Historial de cambios y reconstruccion: `CHANGELOG.md`.
+- Stack principal: FastAPI + LangGraph + DuckDB + Streamlit.
 
-Todos los estados intermedios se persisten en tablas de DuckDB.
-No se generan ficheros JSON intermedios en disco.
+## Flujo funcional actual (frontend)
 
-## Estructura de entrada (obligatoria)
+Orden de páginas en la app:
 
-`data/input` debe seguir esta estructura:
+1. `00_extraccion`: alta de imágenes en base de datos para un módulo
+2. `01_orquestacion`: ejecución por lotes/rango de etapas y control operativo
+3. `02_revision_manual`: corrección manual de OCR/ISBN y salida de review
+4. `03_formulario`: edicion final de ficha (`books`)
+5. `04_exportacion`: salida TXT tabulado para carga externa
+
+Etapas del workflow backend: `ocr -> metadata -> catalog -> cover`.
+
+## Arquitectura
+
+- `src/backend`
+- API FastAPI (`src.backend.main:app`)
+- servicios de OCR, metadata, catalogo, covers, export
+- orquestación LangGraph y estado de workflow
+- `src/frontend`
+- app Streamlit multipágina
+- UI de orquestación, revisión y formulario final
+- `DuckDB`
+- persistencia única de estados intermedios y resultado final
+
+## Estructura de datos de entrada/salida
+
+Estructura requerida en `data/input`:
 
 ```text
 data/input/
@@ -39,117 +54,128 @@ data/input/
     ...
 ```
 
-- `A`, `B`, `C`: bloques de inventario.
-- `01..99`: modulos.
-- El backend valida esta estructura en la ingesta.
+- Bloques validos: `A`, `B`, `C`.
+- Modulos validos: `01..99`.
+- La ejecución siempre trabaja en scope `block + module`.
 
-Ademas, el workflow se ejecuta siempre en scope de modulo (`block + module`).
+Salida de portadas descargadas:
 
-## Persistencia DuckDB
+```text
+data/output/covers/<BLOQUE>/<MODULO>/
+```
 
-Las tablas principales actuales son:
+Salida de exportaciones:
 
-- `book_items`: estado operativo por libro y columnas de control de pipeline/workflow
-- `book_image_files`: imagenes por libro (una fila por imagen, sin ruta absoluta)
-- `book_ocr_data`: resultado OCR e ISBN derivados
-- `book_bibliographic_sources`: fichas crudas por proveedor (`google`, `isbndb`, `openlibrary`)
+```text
+data/output/exports/
+```
 
-Los estados de workflow y de etapas (OCR/metadata/catalog/cover) se centralizan en `book_items`.
+## Modelo de datos (DuckDB)
 
-La tabla final `books` todavia no se crea en esta fase.
-Queda reservada para el volcado final de catalogacion consolidada (a partir de fichas + OCR de creditos).
+Tablas/vistas principales:
 
-## Estructura
+- `book_items`: estado operativo por item y control de workflow
+- `book_image_files`: una fila por imagen asociada a item
+- `book_ocr_data`: texto OCR e ISBN derivados/consolidados
+- `book_bibliographic_sources`: payload por proveedor (`google`, `openlibrary`, `isbndb`)
+- `books`: tabla core editable en formulario final
+- `book_field_allowed_values`: valores cerrados para campos del formulario
+- `ref.iso_639_3`: referencia de idiomas ISO 639-3 con `spa_name`
+- `libros_carga_abebooks` (view): vista de exportación
 
-- `src/backend`: API, servicios, schemas, workflow
-- `src/frontend`: app Streamlit y paginas por fase
-- `data`: entrada/salida y DuckDB
-- `data/output/exports`: exportaciones finales
-
-## Quick start
+## Inicio rapido
 
 ```bash
 cp .env.example .env
 make setup
-make dev-back
-# en otro terminal
-make dev-front
-```
-
-Tambien puedes levantar ambos servicios con:
-
-```bash
 make dev
 ```
 
-y detenerlos con:
+Servicios por defecto:
+
+- Backend: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:8501`
+
+Parada:
 
 ```bash
 make stop
 ```
 
-El `Makefile` incluye comandos multiplataforma (Ubuntu/Linux y Windows) para arranque y parada de backend/frontend.
-Ademas, `make dev` verifica/crea `.venv` e instala dependencias si faltan.
+## Comandos Make relevantes
 
-## Variables de entorno clave
+- `make setup`: crea `.venv` e instala dependencias
+- `make dev`: inicializa DB y levanta backend + frontend
+- `make dev-back`: solo backend
+- `make dev-front`: solo frontend
+- `make init-db`: crea/ajusta esquema de DuckDB
+- `make db-maint`: mantenimiento ligero de DB
+- `make db-repack`: repack a archivo nuevo
+- `make db-repack-replace`: repack y reemplazo del archivo original
+- `make stop`: detiene backend y frontend
 
-- `DB_PATH`: ruta DuckDB
-- `FRONTEND_THEME_CSS`: ruta CSS para UI (`theme.css` o `theme_legacy.css` en `src/frontend/assets`, o ruta absoluta)
-- `COVERS_DIR`: carpeta de entrada de imagenes
-- `COVERS_OUTPUT_DIR`: carpeta de portadas descargadas
-- `OCR_OUTPUT_DIR`: carpeta opcional con OCR preexistente (`<book_id>.txt`)
-- `OCR_PROVIDER`: `auto`, `openai`, `ollama` o `none` (default: `ollama`)
-- `OPENAI_API_KEY`: habilita OCR con OpenAI
-- `OCR_OPENAI_MODEL`: modelo OCR para OpenAI
-- `OCR_OLLAMA_MODEL`: modelo OCR multimodal para Ollama (default: `glm-ocr:latest`)
-- `OCR_RESIZE_TO_1800_DEFAULT`: default del checkbox de UI para reducir imagen a 1800 px antes de OCR con glm-ocr (`true` por defecto)
-- `OCR_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo OCR Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
-- `OCR_ISBN_OLLAMA_MODEL`: modelo Ollama para extraer ISBN desde el texto OCR (default: `gpt-oss:20b`)
-- `OCR_OLLAMA_FALLBACK_MODELS`: lista CSV opcional de modelos OCR de respaldo en Ollama (default: vacio, sin fallback)
-- `OCR_USE_SIDECAR`: si `true`, usa `OCR_OUTPUT_DIR/<book_id>.txt`; por defecto `false` para OCR real sobre imagen
-- `OLLAMA_BASE_URL`: URL base del servicio Ollama
-- `OLLAMA_TIMEOUT_SECONDS`: timeout para llamadas a Ollama (vacio = sin timeout, valor recomendado si quieres limitar: `120`)
-- `CATALOG_MODEL`: compatibilidad hacia atras (fallback de modelo catalogo)
-- `CATALOG_PROVIDER`: `openai` u `ollama` (si está en `.env`, manda ese valor; fallback interno del backend: `openai`)
-- `CATALOG_OPENAI_MODEL`: modelo de arbitraje para OpenAI
-- `CATALOG_OLLAMA_MODEL`: modelo de arbitraje para Ollama
-- `CATALOG_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo catalogo Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
-- `CATALOG_ARBITER_ENABLED`: activa arbitraje LLM en casos dudosos
-- `CATALOG_ARBITER_PROVIDER`: `auto`, `openai`, `ollama` o `none`
-- `CATALOG_ARBITER_MIN_CONFIDENCE`: umbral para disparar arbitraje
-- `ISBNDB_API_KEY`: clave para ISBNdb
-- `WORKFLOW_MAX_ATTEMPTS`: reintentos automaticos por item
+## Configuración por .env (claves principales)
 
-## Temas visuales
+Rutas:
 
-Puedes alternar el tema de Streamlit cambiando solo la ruta en `.env`:
+- `DB_PATH`
+- `COVERS_DIR`
+- `COVERS_OUTPUT_DIR`
+- `OCR_OUTPUT_DIR`
 
-```bash
-# tema nuevo
-FRONTEND_THEME_CSS=theme.css
+OCR:
 
-# tema inspirado en book_catalog_v0.3
-FRONTEND_THEME_CSS=theme_legacy.css
-```
+- `OCR_PROVIDER` (`ollama` u `openai`)
+- `OCR_OLLAMA_MODEL`
+- `OCR_OPENAI_MODEL`
+- `OCR_RESIZE_TO_1800_DEFAULT`
+- `OCR_ISBN_OLLAMA_MODEL`
+- `OCR_OLLAMA_FALLBACK_MODELS`
+- `OCR_USE_SIDECAR`
+- `OLLAMA_BASE_URL`
+- `OLLAMA_TIMEOUT_SECONDS`
 
-## Resolucion catalografica
+Catalogación automatica:
 
-La fase de catalogacion usa reglas deterministas por campo:
+- `CATALOG_PROVIDER` (`ollama` u `openai`)
+- `CATALOG_OLLAMA_MODEL`
+- `CATALOG_OPENAI_MODEL`
+- `CATALOG_OLLAMA_MODEL_SUGGESTIONS`
+- `CATALOG_ARBITER_ENABLED`
+- `CATALOG_ARBITER_PROVIDER`
+- `CATALOG_ARBITER_MIN_CONFIDENCE`
 
-- Normalizacion por fuente (`google`, `open_library`, `isbndb`) a esquema comun
-- Resolucion por consenso entre fuentes y desempate por prioridad
-- Regla especial para editorial: preferencia de nombre comercial sobre forma fiscal
-- Trazabilidad (`provenance`) y calidad (`qa.confidence`, `qa.review_flags`) en `catalog`
-- Arbitro LLM opcional para conflictos/ambiguedades con validacion determinista posterior
-- Si `qa.requires_manual_review=true`, el workflow marca automaticamente el libro en cola de review
+APIs y límites:
 
-## Endpoints principales
+- `OPENAI_API_KEY`
+- `ISBNDB_API_KEY`
+- `REQUEST_TIMEOUT_SECONDS`
+- `WORKFLOW_MAX_ATTEMPTS`
+- `GOOGLE_BOOKS_MIN_INTERVAL_SECONDS`
+- `OPENLIBRARY_MIN_INTERVAL_SECONDS`
 
-- `POST /covers/ingest`
-- `GET /models/ollama`
-- `POST /workflow/run`
-- `GET /workflow/graph`
-- `GET /workflow/snapshot`
-- `POST /workflow/review/{book_id}`
-- `GET /books`, `GET /books/{book_id}`
-- `GET /export/books/tsv`
+Frontend:
+
+- `API_URL`
+- `API_TIMEOUT_SECONDS`
+- `API_LONG_TIMEOUT_SECONDS`
+- `FRONTEND_THEME_CSS`
+
+## Exportación
+
+La exportación usa la vista `libros_carga_abebooks` y aplica filtros por bloque/módulo.
+
+- Formato: TXT delimitado por TAB, con cabecera
+- Encoding configurable: `windows-1252` (default) o `utf-8`
+- Endpoint: `GET /export/books/txt`
+- Descarga de archivo generado: `GET /export/books/file?filename=...`
+
+## Notas operativas
+
+- No se usan JSON intermedios en disco como mecanismo principal del pipeline.
+- El estado operativo vive en DuckDB.
+- La revisión manual y el formulario escriben directamente en base de datos.
+
+## Historial
+
+Para cambios por version, ver `CHANGELOG.md`.

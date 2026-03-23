@@ -26,9 +26,9 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Exportacion | Media Catalog Books")
+configure_page("Exportación | Media Catalog Books")
 
-st.title("Fase 4 · Exportacion")
+st.title("Fase 4 · Exportación")
 show_backend_status()
 
 st.write("Exporta la vista `libros_carga_abebooks` en TXT tabulado (TAB + cabecera).")
@@ -53,21 +53,21 @@ if available_modules:
     selected_modules = st.multiselect("Modulos", options=available_modules, key=modules_key)
 else:
     selected_modules = []
-    st.warning(f"No hay modulos para el bloque {block}.")
+    st.warning(f"No hay módulos para el bloque {block}.")
 
 selected_modules = [str(item).zfill(2) for item in selected_modules if str(item).zfill(2) in available_modules]
 set_selected_scope(block, selected_modules[0] if selected_modules else None)
 
 if selected_modules:
     prefixes = [f"{module}{block}" for module in selected_modules]
-    st.caption("Seleccion activa")
+    st.caption("Selección activa")
     st.markdown(" ".join(f"`{prefix}`" for prefix in prefixes))
 else:
     prefixes = []
-    st.info("Selecciona al menos un modulo para exportar.")
+    st.info("Selecciona al menos un módulo para exportar.")
 
 encoding = st.selectbox(
-    "Codificacion del fichero",
+    "Codificación del fichero",
     ["windows-1252", "utf-8"],
     index=0,
     key="export_encoding_selector",
@@ -112,7 +112,7 @@ if isinstance(download_bytes, (bytes, bytearray)) and str(download_name or "").s
         key="export_download_button",
     )
 
-st.subheader("Preview de exportacion")
+st.subheader("Preview de exportación")
 preview_limit = st.number_input("Filas maximas", min_value=10, max_value=5000, value=300, step=10)
 
 if prefixes:
@@ -145,6 +145,6 @@ if prefixes:
             st.dataframe(df[visible_cols], width="stretch", hide_index=True)
             st.caption(f"Mostrando {len(df)} fila(s)")
         else:
-            st.info("No hay datos para la seleccion actual.")
+            st.info("No hay datos para la selección actual.")
     except Exception as exc:
         st.error(f"No se pudo cargar la preview: {exc}")
