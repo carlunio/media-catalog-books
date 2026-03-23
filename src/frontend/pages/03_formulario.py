@@ -29,7 +29,7 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Catalogación final | Media Catalog Books")
+configure_page("Formulario | Media Catalog Books")
 show_backend_status()
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"

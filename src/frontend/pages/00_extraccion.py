@@ -24,10 +24,10 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Ingesta | Media Catalog Books")
+configure_page("Extraccion | Media Catalog Books")
 
-st.title("Fase 1 · Ingesta")
-st.caption("Indexa imagenes de creditos en DuckDB")
+st.title("Fase 0 · Extraccion")
+st.caption("Extrae e indexa imagenes de creditos en DuckDB")
 show_backend_status()
 
 scope_block, scope_module = select_module_scope(key_prefix="ingesta_scope", title="Modulo de trabajo")
@@ -50,7 +50,7 @@ with st.form("ingest_form"):
     overwrite_paths = st.checkbox("Sobrescribir rutas ya registradas", value=False)
     ext_text = st.text_input("Extensiones (coma separadas)", value="jpg,jpeg,png,webp,heic")
 
-    submitted = st.form_submit_button("Ingestar modulo", type="primary")
+    submitted = st.form_submit_button("Extraer modulo", type="primary")
 
 if submitted:
     extensions = [item.strip() for item in ext_text.split(",") if item.strip()]
@@ -64,10 +64,10 @@ if submitted:
     }
     try:
         result = api_post("/covers/ingest", json=payload, timeout=900.0)
-        st.success("Ingesta completada")
+        st.success("Extraccion completada")
         st.json(result)
     except Exception as exc:
-        st.error(f"Error en ingesta: {exc}")
+        st.error(f"Error en extraccion: {exc}")
 
 st.subheader("Vista rapida de libros")
 
