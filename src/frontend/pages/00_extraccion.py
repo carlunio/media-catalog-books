@@ -24,13 +24,13 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Extraccion | Media Catalog Books")
+configure_page("Extracción | Media Catalog Books")
 
-st.title("Fase 0 · Extraccion")
-st.caption("Extrae e indexa imagenes de creditos en DuckDB")
+st.title("Fase 0 · Extracción")
+st.caption("Extrae e indexa imágenes de créditos en DuckDB")
 show_backend_status()
 
-scope_block, scope_module = select_module_scope(key_prefix="ingesta_scope", title="Modulo de trabajo")
+scope_block, scope_module = select_module_scope(key_prefix="ingesta_scope", title="Módulo de trabajo")
 if not scope_module:
     st.stop()
 
@@ -45,12 +45,12 @@ st.info("La carpeta de entrada debe respetar la estructura: data/input/A|B|C/01.
 default_folder = os.getenv("COVERS_DIR", "data/input")
 
 with st.form("ingest_form"):
-    folder = st.text_input("Carpeta de imagenes", value=default_folder)
-    recursive = st.checkbox("Recursivo dentro del modulo", value=True)
+    folder = st.text_input("Carpeta de imágenes", value=default_folder)
+    recursive = st.checkbox("Recursivo dentro del módulo", value=True)
     overwrite_paths = st.checkbox("Sobrescribir rutas ya registradas", value=False)
     ext_text = st.text_input("Extensiones (coma separadas)", value="jpg,jpeg,png,webp,heic")
 
-    submitted = st.form_submit_button("Extraer modulo", type="primary")
+    submitted = st.form_submit_button("Extraer módulo", type="primary")
 
 if submitted:
     extensions = [item.strip() for item in ext_text.split(",") if item.strip()]
@@ -64,18 +64,18 @@ if submitted:
     }
     try:
         result = api_post("/covers/ingest", json=payload, timeout=900.0)
-        st.success("Extraccion completada")
+        st.success("Extracción completada")
         st.json(result)
     except Exception as exc:
-        st.error(f"Error en extraccion: {exc}")
+        st.error(f"Error en extracción: {exc}")
 
-st.subheader("Vista rapida de libros")
+st.subheader("Vista rápida de libros")
 
 stage_filter = st.selectbox(
     "Filtrar por etapa",
     ["(todas)", "ocr", "metadata", "catalog", "cover", "review", "done", "needs_workflow_review"],
 )
-limit = st.number_input("Limite", min_value=1, max_value=5000, value=200)
+limit = st.number_input("Límite", min_value=1, max_value=5000, value=200)
 
 try:
     params = {"limit": int(limit), **scope_params(scope_block, scope_module)}

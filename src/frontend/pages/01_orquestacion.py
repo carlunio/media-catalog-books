@@ -48,17 +48,17 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Orquestacion | Media Catalog Books")
+configure_page("Orquestación | Media Catalog Books")
 
-st.title("Fase 1 · Orquestacion LangGraph")
+st.title("Fase 1 · Orquestación LangGraph")
 st.caption(f"Backend objetivo: {API_URL}")
 show_backend_status()
 
-scope_block, scope_module = select_module_scope(key_prefix="orq_scope", title="Modulo de trabajo")
+scope_block, scope_module = select_module_scope(key_prefix="orq_scope", title="Módulo de trabajo")
 if not scope_module:
     st.stop()
 
-with st.expander("Definicion del grafo", expanded=False):
+with st.expander("Definición del grafo", expanded=False):
     try:
         graph = api_get("/workflow/graph", timeout=12.0)
         st.write("LangGraph disponible:", graph.get("langgraph_available"))
@@ -85,7 +85,7 @@ with col2:
         st.session_state[start_stage_key] = WORKFLOW_STAGES[0]
     start_stage = st.selectbox("Desde", WORKFLOW_STAGES, key=start_stage_key)
 with col3:
-    stop_options = ["(sin limite)"] + list(WORKFLOW_STAGES)
+    stop_options = ["(sin límite)"] + list(WORKFLOW_STAGES)
     stop_after_key = "orq_stop_after"
     prev_start_key = "orq_prev_start_stage"
     previous_start = str(st.session_state.get(prev_start_key) or "").strip()
@@ -99,13 +99,13 @@ with col3:
     stop_after = st.selectbox("Parar en", stop_options, key=stop_after_key)
     st.session_state[prev_start_key] = start_stage
 with col4:
-    st.caption("El limite de lote depende de la etapa y overwrite")
+    st.caption("El límite de lote depende de la etapa y overwrite")
 
 overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
 max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
 
 start_idx = STAGE_INDEX.get(start_stage, 0)
-stop_idx = len(WORKFLOW_STAGES) - 1 if stop_after == "(sin limite)" else STAGE_INDEX.get(stop_after, start_idx)
+stop_idx = len(WORKFLOW_STAGES) - 1 if stop_after == "(sin límite)" else STAGE_INDEX.get(stop_after, start_idx)
 if stop_idx < start_idx:
     stop_idx = start_idx
 
@@ -135,7 +135,7 @@ else:
     if eligible_limit is None:
         limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
     elif eligible_limit <= 0:
-        st.info(f"No hay items elegibles en etapa '{start_stage}' para el modulo seleccionado.")
+        st.info(f"No hay items elegibles en etapa '{start_stage}' para el módulo seleccionado.")
         limit = 0
     else:
         st.caption(f"Elegibles exactos para '{start_stage}' sin overwrite: {eligible_limit}")
@@ -194,7 +194,7 @@ with col_model:
     if not ocr_in_flow:
         st.caption("OCR fuera del rango seleccionado; configuración desactivada.")
 
-st.caption("Configuracion de catalogacion automatica")
+st.caption("Configuración de catalogación automatica")
 cat_col_a, cat_col_b = st.columns([1, 2])
 with cat_col_a:
     catalog_provider_options = ["openai", "ollama"]
@@ -245,7 +245,7 @@ if st.button("Ejecutar workflow", type="primary"):
         "module": scope_module,
         "limit": int(limit),
         "start_stage": start_stage,
-        "stop_after": None if stop_after == "(sin limite)" else stop_after,
+        "stop_after": None if stop_after == "(sin límite)" else stop_after,
         "overwrite": bool(overwrite),
         "max_attempts": int(max_attempts),
         "ocr_provider": ocr_provider,
@@ -352,7 +352,7 @@ else:
     st.success("No hay items en running.")
 
 review_queue = snapshot.get("review_queue", [])
-st.subheader("Cola de revision")
+st.subheader("Cola de revisión")
 
 if review_queue:
     queue_df = pd.DataFrame(review_queue)
@@ -394,7 +394,7 @@ if review_queue:
         if st.button("Marcar nuevamente en review"):
             try:
                 payload = {
-                    "reason": "Marcado manual desde pagina de orquestacion",
+                    "reason": "Marcado manual desde pagina de orquestación",
                     "node": "manual",
                 }
                 result = api_post(f"/workflow/review/{selected_review_id}/mark", json=payload)
@@ -403,4 +403,4 @@ if review_queue:
             except Exception as exc:
                 st.error(f"No se pudo marcar en review: {exc}")
 else:
-    st.success("No hay libros en cola de revision.")
+    st.success("No hay libros en cola de revisión.")
