@@ -50,7 +50,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 configure_page("Orquestacion | Media Catalog Books")
 
-st.title("Fase 0 · Orquestacion LangGraph")
+st.title("Fase 1 · Orquestacion LangGraph")
 st.caption(f"Backend objetivo: {API_URL}")
 show_backend_status()
 

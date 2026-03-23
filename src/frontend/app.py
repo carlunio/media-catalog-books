@@ -29,10 +29,10 @@ st.markdown(
     ingesta, OCR, ISBN, metadatos y consolidacion.
   </p>
   <div class="mc-stage-grid">
-    <div class="mc-stage-card"><span class="mc-stage-index">0</span><span class="mc-stage-title">Orquestacion</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">1</span><span class="mc-stage-title">Ingesta</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">OCR + ISBN</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Ejecucion por etapa</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">0</span><span class="mc-stage-title">Extraccion</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">1</span><span class="mc-stage-title">Orquestacion</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">Revision OCR + ISBN</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Formulario</span></div>
     <div class="mc-stage-card"><span class="mc-stage-index">4</span><span class="mc-stage-title">Exportacion</span></div>
   </div>
 </div>
