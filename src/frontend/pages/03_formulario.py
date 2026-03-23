@@ -262,6 +262,7 @@ SALMON_FIELDS: set[str] = {
 
 IMPORTANT_FIELDS: set[str] = {
     "edicion",
+    "coleccion",
     "numero_coleccion",
     "obra_completa",
     "volumen",
