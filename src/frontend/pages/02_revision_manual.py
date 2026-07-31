@@ -22,7 +22,6 @@ try:
         scope_params,
         select_book_id,
         select_module_scope,
-        set_selected_book_id,
         show_backend_status,
     )
 except ModuleNotFoundError:  # pragma: no cover
@@ -41,7 +40,6 @@ except ModuleNotFoundError:  # pragma: no cover
         scope_params,
         select_book_id,
         select_module_scope,
-        set_selected_book_id,
         show_backend_status,
     )
 
@@ -338,18 +336,28 @@ if not filtered_rows:
     st.info("No hay libros con los filtros actuales.")
     st.stop()
 
-selected_id = select_book_id(filtered_rows, label="Selecciona libro", key="book_ocr_review_selector")
 book_ids = [str(row.get("id") or "") for row in filtered_rows if str(row.get("id") or "")]
+selector_key = "book_ocr_review_selector"
+selector_pending_key = "book_ocr_review_selector_pending"
+
+pending_selected = st.session_state.pop(selector_pending_key, None)
+if pending_selected in book_ids:
+    st.session_state[selector_key] = pending_selected
+
+if selector_key in st.session_state and st.session_state.get(selector_key) not in book_ids:
+    st.session_state[selector_key] = book_ids[0]
+
+selected_id = select_book_id(filtered_rows, label="Selecciona libro", key=selector_key)
 current_index = book_ids.index(selected_id)
 
 col_prev, col_next = st.columns(2)
 with col_prev:
     if st.button("Anterior", disabled=current_index == 0, key="book_ocr_review_prev"):
-        set_selected_book_id(book_ids[current_index - 1])
+        st.session_state[selector_pending_key] = book_ids[current_index - 1]
         st.rerun()
 with col_next:
     if st.button("Siguiente", disabled=current_index == len(book_ids) - 1, key="book_ocr_review_next"):
-        set_selected_book_id(book_ids[current_index + 1])
+        st.session_state[selector_pending_key] = book_ids[current_index + 1]
         st.rerun()
 
 st.caption(f"Registro {current_index + 1} de {len(book_ids)}")

@@ -1,3 +1,22 @@
+## [Unreleased]
+
+### Added
+- Metadatos de proyecto centralizados en `src/project_meta.py` y versión visible en API/UI.
+- Routers FastAPI separados por dominio para core, ingesta, workflow, libros, ficha core, exportación y snapshots.
+- Migraciones idempotentes con tabla `schema_migrations` y script `scripts/migrate_db.py`.
+- Snapshots DuckDB con manifiesto, verificación `sha256`, backup local antes de importar y página Streamlit `05_datos`.
+- Targets Make para migraciones, snapshots, actualización, lint, formato y tests.
+- CI con lint/test y lanzadores `tools/` para Windows/Linux.
+- Tests de import de API, esquema, migraciones, exportación y snapshots.
+
+### Changed
+- `scripts/init_db.py` pasa a aplicar migraciones en lugar de inicializar el esquema directamente.
+- `src/backend/main.py` queda como composición de app y routers.
+- README actualizado con operación, snapshots, tooling y roadmap técnico.
+
+### Preserved
+- Sin cambios intencionados en campos de negocio de `books` ni en columnas de `libros_carga_abebooks`.
+
 ## [0.1.1] - 2026-03-23
 
 ### Added

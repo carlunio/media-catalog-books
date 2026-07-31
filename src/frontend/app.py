@@ -34,6 +34,7 @@ st.markdown(
     <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">Revisión OCR + ISBN</span></div>
     <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Formulario</span></div>
     <div class="mc-stage-card"><span class="mc-stage-index">4</span><span class="mc-stage-title">Exportación</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">5</span><span class="mc-stage-title">Datos</span></div>
   </div>
 </div>
 """,

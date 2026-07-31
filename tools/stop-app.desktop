@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Media Catalog Books - Detener
+Comment=Detiene el backend y el frontend
+Terminal=true
+Icon=utilities-terminal
+Categories=Development;
+Exec=sh -c 'desktop_file="$1"; desktop_file="${desktop_file#file://}"; script_dir="$(CDPATH= cd -- "$(dirname -- "$desktop_file")" && pwd)"; exec "$script_dir/stop-app.sh"' sh %k

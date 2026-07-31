@@ -630,106 +630,109 @@ def _create_books_core_schema(con: Any) -> None:
     )
 
 
-def init_table() -> None:
-    with get_connection() as con:
-        # Operational state lives in `book_items`; core output schema is created in `books`.
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS book_items (
-                id VARCHAR PRIMARY KEY,
-                block VARCHAR,
-                module VARCHAR,
-                seq VARCHAR,
+def ensure_schema(con: Any) -> None:
+    # Operational state lives in book_items; core output schema is created in books.
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS book_items (
+            id VARCHAR PRIMARY KEY,
+            block VARCHAR,
+            module VARCHAR,
+            seq VARCHAR,
 
-                ocr_status VARCHAR,
-                ocr_error VARCHAR,
-                ocr_provider VARCHAR,
-                ocr_model VARCHAR,
-                ocr_trace_json VARCHAR,
+            ocr_status VARCHAR,
+            ocr_error VARCHAR,
+            ocr_provider VARCHAR,
+            ocr_model VARCHAR,
+            ocr_trace_json VARCHAR,
 
-                metadata_status VARCHAR,
-                metadata_error VARCHAR,
+            metadata_status VARCHAR,
+            metadata_error VARCHAR,
 
-                catalog_json VARCHAR,
-                catalog_status VARCHAR,
-                catalog_error VARCHAR,
+            catalog_json VARCHAR,
+            catalog_status VARCHAR,
+            catalog_error VARCHAR,
 
-                cover_path VARCHAR,
-                cover_status VARCHAR,
-                cover_error VARCHAR,
+            cover_path VARCHAR,
+            cover_status VARCHAR,
+            cover_error VARCHAR,
 
-                workflow_status VARCHAR DEFAULT 'pending',
-                workflow_current_node VARCHAR,
-                workflow_action VARCHAR,
-                workflow_attempt INTEGER DEFAULT 0,
-                workflow_needs_review BOOLEAN DEFAULT FALSE,
-                workflow_review_reason VARCHAR,
+            workflow_status VARCHAR DEFAULT 'pending',
+            workflow_current_node VARCHAR,
+            workflow_action VARCHAR,
+            workflow_attempt INTEGER DEFAULT 0,
+            workflow_needs_review BOOLEAN DEFAULT FALSE,
+            workflow_review_reason VARCHAR,
 
-                pipeline_stage VARCHAR DEFAULT 'ocr',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+            pipeline_stage VARCHAR DEFAULT 'ocr',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+        """
+    )
 
-        # Keep schema coherent if legacy columns exist in an already-created DB.
-        for legacy_column in ("image_path", "image_count", "credits_text", "isbn_raw", "isbn", "metadata_json"):
-            try:
-                con.execute(f"ALTER TABLE book_items DROP COLUMN IF EXISTS {legacy_column}")
-            except Exception:
-                pass
-
+    # Keep schema coherent if legacy columns exist in an already-created DB.
+    for legacy_column in ("image_path", "image_count", "credits_text", "isbn_raw", "isbn", "metadata_json"):
         try:
-            con.execute("ALTER TABLE book_items ADD COLUMN IF NOT EXISTS workflow_action VARCHAR")
+            con.execute(f"ALTER TABLE book_items DROP COLUMN IF EXISTS {legacy_column}")
         except Exception:
             pass
 
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS book_image_files (
-                book_id VARCHAR,
-                n_imagen INTEGER,
-                filename VARCHAR,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(book_id, n_imagen)
-            )
-            """
+    try:
+        con.execute("ALTER TABLE book_items ADD COLUMN IF NOT EXISTS workflow_action VARCHAR")
+    except Exception:
+        pass
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS book_image_files (
+            book_id VARCHAR,
+            n_imagen INTEGER,
+            filename VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(book_id, n_imagen)
         )
+        """
+    )
 
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS book_ocr_data (
-                book_id VARCHAR PRIMARY KEY,
-                extracted_text VARCHAR,
-                isbn_raw VARCHAR,
-                isbn VARCHAR,
-                isbn_list VARCHAR,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS book_ocr_data (
+            book_id VARCHAR PRIMARY KEY,
+            extracted_text VARCHAR,
+            isbn_raw VARCHAR,
+            isbn VARCHAR,
+            isbn_list VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+        """
+    )
 
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS book_bibliographic_sources (
-                book_id VARCHAR,
-                provider VARCHAR,
-                isbn VARCHAR,
-                payload_json VARCHAR,
-                provider_status VARCHAR,
-                provider_error VARCHAR,
-                fetched_at VARCHAR,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(book_id, provider)
-            )
-            """
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS book_bibliographic_sources (
+            book_id VARCHAR,
+            provider VARCHAR,
+            isbn VARCHAR,
+            payload_json VARCHAR,
+            provider_status VARCHAR,
+            provider_error VARCHAR,
+            fetched_at VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(book_id, provider)
         )
+        """
+    )
 
-        _create_books_core_schema(con)
+    _create_books_core_schema(con)
 
+
+def init_table() -> None:
+    with get_connection() as con:
+        ensure_schema(con)
 
 
 def _payload_column(payload_type: str) -> str:

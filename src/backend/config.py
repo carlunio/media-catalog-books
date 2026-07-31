@@ -1,5 +1,9 @@
 import os
+import socket
 from pathlib import Path
+
+
+SNAPSHOTS_REPO_DIRNAME = "media-catalog-books"
 
 
 def _as_float(value: str, default: float) -> float:
@@ -77,7 +81,15 @@ def _resolve_path(env_name: str, default_relative: str) -> Path:
 DB_PATH = _resolve_path("DB_PATH", "data/books.duckdb")
 DEFAULT_COVERS_DIR = _resolve_path("COVERS_DIR", "data/input")
 DEFAULT_COVERS_OUTPUT_DIR = _resolve_path("COVERS_OUTPUT_DIR", "data/output/covers")
+EXPORTS_DIR = _resolve_path("EXPORTS_DIR", "data/output/exports")
 OCR_OUTPUT_DIR = _resolve_path("OCR_OUTPUT_DIR", "ocr_output")
+BBDD_DIR = _resolve_path("BBDD_DIR", "../bbdd")
+CLOUD_SNAPSHOTS_DIR = BBDD_DIR / SNAPSHOTS_REPO_DIRNAME
+SYNC_STATE_PATH = _resolve_path("SYNC_STATE_PATH", "data/sync_state.json")
+SYNC_ACTOR = os.getenv("SYNC_ACTOR", os.getenv("USER", "usuario")).strip() or "usuario"
+SYNC_DEVICE = os.getenv("SYNC_DEVICE", socket.gethostname()).strip() or "equipo"
+SYNC_RETENTION_DAYS = _as_int(os.getenv("SYNC_RETENTION_DAYS", "14"), 14)
+SYNC_KEEP_MIN = max(1, _as_int(os.getenv("SYNC_KEEP_MIN", "10"), 10))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ISBNDB_API_KEY = os.getenv("ISBNDB_API_KEY")
@@ -112,7 +124,15 @@ if __name__ == "__main__":
     print("DB_PATH:", DB_PATH)
     print("DEFAULT_COVERS_DIR:", DEFAULT_COVERS_DIR)
     print("DEFAULT_COVERS_OUTPUT_DIR:", DEFAULT_COVERS_OUTPUT_DIR)
+    print("EXPORTS_DIR:", EXPORTS_DIR)
     print("OCR_OUTPUT_DIR:", OCR_OUTPUT_DIR)
+    print("BBDD_DIR:", BBDD_DIR)
+    print("CLOUD_SNAPSHOTS_DIR:", CLOUD_SNAPSHOTS_DIR)
+    print("SYNC_STATE_PATH:", SYNC_STATE_PATH)
+    print("SYNC_ACTOR:", SYNC_ACTOR)
+    print("SYNC_DEVICE:", SYNC_DEVICE)
+    print("SYNC_RETENTION_DAYS:", SYNC_RETENTION_DAYS)
+    print("SYNC_KEEP_MIN:", SYNC_KEEP_MIN)
     print("OCR_PROVIDER:", OCR_PROVIDER)
     print("OCR_OPENAI_MODEL:", OCR_OPENAI_MODEL)
     print("OCR_OLLAMA_MODEL:", OCR_OLLAMA_MODEL)

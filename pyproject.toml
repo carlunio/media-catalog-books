@@ -22,7 +22,8 @@ dependencies = [
 dev = [
   "pytest",
   "ruff",
-  "black"
+  "black",
+  "httpx"
 ]
 
 [tool.setuptools]

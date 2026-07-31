@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Media Catalog Books - Actualizar y arrancar
+Comment=Actualiza la aplicación y después arranca backend y frontend
+Terminal=true
+Icon=utilities-terminal
+Categories=Development;
+Exec=sh -c 'desktop_file="$1"; desktop_file="${desktop_file#file://}"; script_dir="$(CDPATH= cd -- "$(dirname -- "$desktop_file")" && pwd)"; exec "$script_dir/update-and-launch-app.sh"' sh %k

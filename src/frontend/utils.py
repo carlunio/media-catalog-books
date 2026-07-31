@@ -8,7 +8,13 @@ from typing import Any
 import requests
 import streamlit as st
 
+try:
+    from src.project_meta import get_app_meta
+except ModuleNotFoundError:  # pragma: no cover
+    from project_meta import get_app_meta
+
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+APP_META = get_app_meta()
 WORKFLOW_STAGES = ("ocr", "metadata", "catalog", "cover")
 BLOCK_OPTIONS = ("A", "B", "C")
 MODULE_NAME_PATTERN = re.compile(r"^\d{2}$")
@@ -48,6 +54,16 @@ def _as_bool(value: str | None, *, fallback: bool) -> bool:
         return False
     return fallback
 
+
+def _as_float(raw: str | None, default: float) -> float:
+    try:
+        return float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+DEFAULT_TIMEOUT_SECONDS = _as_float(os.getenv("API_TIMEOUT_SECONDS"), 90.0)
+LONG_TIMEOUT_SECONDS = _as_float(os.getenv("API_LONG_TIMEOUT_SECONDS"), 900.0)
 
 OCR_PROVIDER_DEFAULT = _normalize_provider(os.getenv("OCR_PROVIDER"), fallback="ollama")
 OCR_OPENAI_MODEL_DEFAULT = str(os.getenv("OCR_OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini").strip()
@@ -138,6 +154,9 @@ def configure_page(title: str = "Media Catalog Books") -> None:
     except Exception:
         pass
     _apply_theme()
+    st.sidebar.caption(f"Versión: {APP_META.display_version}")
+    if APP_META.changelog_path.exists():
+        st.sidebar.caption(f"Cambios: {APP_META.changelog_path.name}")
 
 
 def _url(path: str) -> str:

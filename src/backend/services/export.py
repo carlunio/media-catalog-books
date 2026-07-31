@@ -65,11 +65,28 @@ def _split_tokens(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
         text = str(value).strip()
         if not text:
             return []
-        tokens = [chunk.strip() for chunk in re.split(r"[,\s;]+", text) if chunk.strip()]
+        tokens = [
+            chunk.strip()
+            for chunk in re.split(r"[,\s;]+", text)
+            if chunk.strip()
+        ]
     return [token for token in tokens if token]
 
 
-def _resolve_prefixes(*, block: str | None, modules: str | list[str] | tuple[str, ...] | None) -> list[str]:
+def _normalize_ids(ids: list[str] | tuple[str, ...] | None) -> list[str]:
+    normalized_ids: list[str] = []
+    for raw_id in ids or []:
+        item_id = str(raw_id or "").strip()
+        if item_id and item_id not in normalized_ids:
+            normalized_ids.append(item_id)
+    return normalized_ids
+
+
+def _resolve_prefixes(
+    *,
+    block: str | None,
+    modules: str | list[str] | tuple[str, ...] | None,
+) -> list[str]:
     normalized_block = _normalize_block(block)
     tokens = _split_tokens(modules)
     prefixes: list[str] = []
@@ -145,14 +162,24 @@ def query_export_rows(
     *,
     block: str | None = None,
     modules: str | list[str] | tuple[str, ...] | None = None,
+    ids: list[str] | tuple[str, ...] | None = None,
     limit: int | None = None,
 ) -> tuple[list[str], list[dict[str, Any]], str | None, list[str]]:
     normalized_block = _normalize_block(block)
     prefixes = _resolve_prefixes(block=normalized_block, modules=modules)
+    normalized_ids = _normalize_ids(ids)
 
     sql = f"SELECT * FROM {EXPORT_VIEW_NAME}"
     where: list[str] = []
     params: list[Any] = []
+
+    if ids is not None:
+        if not normalized_ids:
+            where.append("FALSE")
+        else:
+            placeholders = ", ".join(["?"] * len(normalized_ids))
+            where.append(f"listingid IN ({placeholders})")
+            params.extend(normalized_ids)
 
     if prefixes:
         placeholders = ", ".join(["?"] * len(prefixes))
@@ -182,11 +209,88 @@ def query_export_rows(
     return columns, rows, normalized_block, prefixes
 
 
+def _is_blank(value: Any) -> bool:
+    return not str(value or "").strip()
+
+
+def _validation_row(row: dict[str, Any]) -> dict[str, Any]:
+    errors: list[str] = []
+    listingid = str(row.get("listingid") or "").strip()
+
+    if _is_blank(row.get("listingid")):
+        errors.append("Falta listingid.")
+    if _is_blank(row.get("title")):
+        errors.append("Falta title.")
+    if _is_blank(row.get("price")):
+        errors.append("Falta price.")
+    if _is_blank(row.get("quantity")):
+        errors.append("Falta quantity.")
+
+    return {
+        "id": listingid,
+        "listingid": listingid,
+        "title": row.get("title"),
+        "price": row.get("price"),
+        "quantity": row.get("quantity"),
+        "is_valid": not errors,
+        "errors": errors,
+    }
+
+
+def validate_export_rows(
+    *,
+    block: str | None = None,
+    modules: str | list[str] | tuple[str, ...] | None = None,
+    ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    _, rows, normalized_block, prefixes = query_export_rows(
+        block=block,
+        modules=modules,
+        ids=ids,
+        limit=None,
+    )
+    validation_rows = [_validation_row(row) for row in rows]
+
+    if ids is not None:
+        found_ids = {str(row.get("id") or "").strip() for row in validation_rows}
+        for item_id in _normalize_ids(ids):
+            if item_id not in found_ids:
+                validation_rows.append(
+                    {
+                        "id": item_id,
+                        "listingid": item_id,
+                        "title": None,
+                        "price": None,
+                        "quantity": None,
+                        "is_valid": False,
+                        "errors": [
+                            "La ficha no existe o no esta en estado exportable."
+                        ],
+                    }
+                )
+
+    valid_ids = [str(row["id"]) for row in validation_rows if row.get("is_valid")]
+    invalid_rows = [row for row in validation_rows if not row.get("is_valid")]
+    return {
+        "ok": True,
+        "rows": validation_rows,
+        "rows_count": len(validation_rows),
+        "valid_count": len(valid_ids),
+        "invalid_count": len(invalid_rows),
+        "valid_ids": valid_ids,
+        "invalid_ids": [str(row["id"]) for row in invalid_rows],
+        "ids": [str(row["id"]) for row in validation_rows],
+        "block": normalized_block,
+        "prefixes": prefixes,
+    }
+
+
 def export_books_tsv(
     output_path: Path,
     *,
     block: str | None = None,
     modules: str | list[str] | tuple[str, ...] | None = None,
+    ids: list[str] | tuple[str, ...] | None = None,
     encoding: str = "windows-1252",
 ) -> dict[str, Any]:
     target_encoding = _normalize_encoding(encoding)
@@ -195,6 +299,7 @@ def export_books_tsv(
     columns, rows, normalized_block, prefixes = query_export_rows(
         block=block,
         modules=modules,
+        ids=ids,
         limit=None,
     )
 
@@ -209,7 +314,12 @@ def export_books_tsv(
         )
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: _serialize_value(row.get(key), encoding=target_encoding) for key in columns})
+            writer.writerow(
+                {
+                    key: _serialize_value(row.get(key), encoding=target_encoding)
+                    for key in columns
+                }
+            )
 
     return {
         "path": output_path,
@@ -218,4 +328,46 @@ def export_books_tsv(
         "encoding": target_encoding,
         "block": normalized_block,
         "prefixes": prefixes,
+        "ids": [
+            str(row.get("listingid") or "").strip()
+            for row in rows
+            if str(row.get("listingid") or "").strip()
+        ],
     }
+
+
+def mark_exported_books_uploaded(ids: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    normalized_ids = _normalize_ids(ids)
+    if not normalized_ids:
+        return {"updated": 0, "ids": []}
+
+    placeholders = ", ".join(["?"] * len(normalized_ids))
+    params: list[Any] = list(normalized_ids)
+
+    with get_connection() as con:
+        rows = con.execute(
+            f"""
+            SELECT id
+            FROM books
+            WHERE id IN ({placeholders})
+              AND estado_carga IN ('Para subir', 'Para actualizar')
+            """,
+            params,
+        ).fetchall()
+        matched_ids = [
+            str(row[0] or "").strip()
+            for row in rows
+            if str(row[0] or "").strip()
+        ]
+        if matched_ids:
+            matched_placeholders = ", ".join(["?"] * len(matched_ids))
+            con.execute(
+                f"""
+                UPDATE books
+                SET estado_carga = 'Subido'
+                WHERE id IN ({matched_placeholders})
+                """,
+                matched_ids,
+            )
+
+    return {"updated": len(matched_ids), "ids": matched_ids}
