@@ -45,7 +45,9 @@ def _ollama_post_json(
     if response.status_code >= 400:
         detail = _extract_ollama_error(response)
         suffix = f": {detail}" if detail else ""
-        raise ClientError(f"{operation} failed ({response.status_code}) for {url}{suffix}")
+        raise ClientError(
+            f"{operation} failed ({response.status_code}) for {url}{suffix}"
+        )
 
     try:
         payload = response.json()
@@ -68,7 +70,9 @@ def _ollama_parse_generate_content(payload: dict[str, Any]) -> str:
     return str(payload.get("response") or "").strip()
 
 
-def list_ollama_models(*, base_url: str | None = None, timeout: float = REQUEST_TIMEOUT_SECONDS) -> list[str]:
+def list_ollama_models(
+    *, base_url: str | None = None, timeout: float = REQUEST_TIMEOUT_SECONDS
+) -> list[str]:
     url = f"{_normalize_base_url(base_url)}/api/tags"
     try:
         response = requests.get(url, timeout=timeout)
@@ -127,7 +131,9 @@ def ollama_chat_with_images(
         text = _ollama_parse_chat_content(payload)
         if text:
             return text
-        chat_error = ClientError(f"Ollama /api/chat returned empty content for {chat_url}")
+        chat_error = ClientError(
+            f"Ollama /api/chat returned empty content for {chat_url}"
+        )
     except ClientError as exc:
         chat_error = exc
 
@@ -142,7 +148,9 @@ def ollama_chat_with_images(
         text = _ollama_parse_generate_content(payload)
         if text:
             return text
-        raise ClientError(f"Ollama /api/generate returned empty response for {generate_url}")
+        raise ClientError(
+            f"Ollama /api/generate returned empty response for {generate_url}"
+        )
     except ClientError as exc:
         if chat_error:
             raise ClientError(f"{chat_error}; fallback failed: {exc}") from exc
@@ -185,7 +193,9 @@ def ollama_chat_text(
         text = _ollama_parse_chat_content(payload)
         if text:
             return text
-        chat_error = ClientError(f"Ollama /api/chat returned empty content for {chat_url}")
+        chat_error = ClientError(
+            f"Ollama /api/chat returned empty content for {chat_url}"
+        )
     except ClientError as exc:
         chat_error = exc
 
@@ -200,7 +210,9 @@ def ollama_chat_text(
         text = _ollama_parse_generate_content(payload)
         if text:
             return text
-        raise ClientError(f"Ollama /api/generate returned empty response for {generate_url}")
+        raise ClientError(
+            f"Ollama /api/generate returned empty response for {generate_url}"
+        )
     except ClientError as exc:
         if chat_error:
             raise ClientError(f"{chat_error}; fallback failed: {exc}") from exc

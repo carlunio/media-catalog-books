@@ -23,17 +23,18 @@ st.markdown(
     """
 <div class="mc-hero">
   <div class="mc-kicker">Media Catalog Books</div>
-  <h1 class="mc-hero-title">Catalogacion por bloques, modulo a modulo</h1>
+  <h1 class="mc-hero-title">Catalogación por bloques, módulo a módulo</h1>
   <p class="mc-hero-sub">
     Opera la cadena completa con FastAPI + LangGraph + DuckDB:
-    ingesta, OCR, ISBN, metadatos y consolidacion.
+    ingesta, OCR, ISBN, metadatos y consolidación.
   </p>
   <div class="mc-stage-grid">
-    <div class="mc-stage-card"><span class="mc-stage-index">0</span><span class="mc-stage-title">Orquestacion</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">1</span><span class="mc-stage-title">Ingesta</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">OCR + ISBN</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Ejecucion por etapa</span></div>
-    <div class="mc-stage-card"><span class="mc-stage-index">4</span><span class="mc-stage-title">Exportacion</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">0</span><span class="mc-stage-title">Extracción</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">1</span><span class="mc-stage-title">Orquestación</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">2</span><span class="mc-stage-title">Revisión OCR + ISBN</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">3</span><span class="mc-stage-title">Formulario</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">4</span><span class="mc-stage-title">Exportación</span></div>
+    <div class="mc-stage-card"><span class="mc-stage-index">5</span><span class="mc-stage-title">Datos</span></div>
   </div>
 </div>
 """,
@@ -45,16 +46,17 @@ active_block, active_module = get_selected_scope()
 if active_module:
     st.caption(f"Scope activo: {active_block}/{active_module}")
 else:
-    st.caption(f"Scope activo: {active_block} (sin modulos)")
+    st.caption(f"Scope activo: {active_block} (sin módulos)")
 stats = load_stats(block=active_block, module=active_module)
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total", stats.get("total", 0))
 col2.metric("En review", stats.get("needs_workflow_review", 0))
 col3.metric("Pend. OCR", stats.get("needs_ocr", 0))
+col4.metric("Consolidadas", stats.get("form_consolidated", 0))
 
 selected_book = get_selected_book_id()
 if selected_book:
     st.sidebar.caption(f"Libro seleccionado: {selected_book}")
 
-st.info("Usa el menu lateral para entrar en cada fase del flujo.")
+st.info("Usa el menú lateral para entrar en cada fase del flujo.")

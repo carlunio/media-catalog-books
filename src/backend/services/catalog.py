@@ -11,7 +11,6 @@ from ..config import (
 )
 from . import books
 
-
 CATALOG_SYSTEM_PROMPT = """
 Eres un asistente experto en bibliografía. Tu tarea es extraer información precisa sobre libros a partir de diversas fuentes y consolidarla en un formato estructurado. 
 
@@ -220,10 +219,24 @@ def _delete_nested_key(payload: dict[str, Any], path: tuple[str, ...]) -> None:
     _delete_nested_key(head, path[1:])
 
 
-def _clean_sources_for_prompt(metadata: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    google = dict(metadata.get("google") or {}) if isinstance(metadata.get("google"), dict) else {}
-    open_library = dict(metadata.get("open_library") or {}) if isinstance(metadata.get("open_library"), dict) else {}
-    isbndb = json.loads(json.dumps(metadata.get("isbndb") or {})) if isinstance(metadata.get("isbndb"), dict) else {}
+def _clean_sources_for_prompt(
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    google = (
+        dict(metadata.get("google") or {})
+        if isinstance(metadata.get("google"), dict)
+        else {}
+    )
+    open_library = (
+        dict(metadata.get("open_library") or {})
+        if isinstance(metadata.get("open_library"), dict)
+        else {}
+    )
+    isbndb = (
+        json.loads(json.dumps(metadata.get("isbndb") or {}))
+        if isinstance(metadata.get("isbndb"), dict)
+        else {}
+    )
 
     for key in GOOGLE_KEYS_TO_DROP:
         google.pop(key, None)
@@ -238,7 +251,11 @@ def _clean_sources_for_prompt(metadata: dict[str, Any]) -> tuple[dict[str, Any],
 def _isbndb_dimensions_metric(metadata: dict[str, Any]) -> dict[str, Any]:
     isbndb = metadata.get("isbndb") if isinstance(metadata.get("isbndb"), dict) else {}
     book_payload = isbndb.get("book") if isinstance(isbndb.get("book"), dict) else {}
-    dimensions = book_payload.get("dimensions_structured") if isinstance(book_payload.get("dimensions_structured"), dict) else {}
+    dimensions = (
+        book_payload.get("dimensions_structured")
+        if isinstance(book_payload.get("dimensions_structured"), dict)
+        else {}
+    )
     if not dimensions:
         return {}
 
@@ -290,14 +307,18 @@ def _catalog_model_for_provider(provider: str, model: str | None) -> str:
 def _call_catalog_llm(*, provider: str, model: str, prompt: str) -> str:
     if provider == "openai":
         if not OPENAI_API_KEY:
-            raise ClientError("OPENAI_API_KEY is not configured for catalog provider openai")
+            raise ClientError(
+                "OPENAI_API_KEY is not configured for catalog provider openai"
+            )
         return openai_text_chat(api_key=OPENAI_API_KEY, model=model, prompt=prompt)
     if provider == "ollama":
         return ollama_chat_text(model=model, prompt=prompt)
     raise ClientError(f"Unsupported catalog provider: {provider}")
 
 
-def build_catalog_payload(book: dict[str, Any], *, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+def build_catalog_payload(
+    book: dict[str, Any], *, provider: str | None = None, model: str | None = None
+) -> dict[str, Any]:
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
     credits_text = str(book.get("credits_text") or "").strip()
     google_clean, open_library_clean, isbndb_clean = _clean_sources_for_prompt(metadata)

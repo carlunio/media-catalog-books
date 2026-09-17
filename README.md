@@ -1,27 +1,55 @@
 # media-catalog-books
 
-Refactor de `book_catalog_v0.3` a arquitectura estandarizada con:
+Aplicación para catalogación de libros con flujo por módulos (bloque + módulo),
+backend API, orquestación de etapas, revisión manual, formulario final y
+exportación tabulada para carga externa.
 
-- `FastAPI` (backend de servicios)
-- `LangGraph` (orquestacion de pipeline)
-- `DuckDB` (persistencia)
-- `Streamlit` (frontend operativo multipagina)
+## Estado del proyecto
 
-## Pipeline
+Este README documenta el estado actual del proyecto.
 
-1. Ingesta de imagenes de creditos (desde carpeta)
-2. OCR + extraccion ISBN
-3. Enriquecimiento de metadatos (Google Books, Open Library, ISBNdb)
-4. Consolidacion de ficha catalografica
-5. Descarga de portada final
-6. Exportacion TSV
+- Historial de cambios y reconstrucción: `CHANGELOG.md`.
+- Seguimiento técnico: `ROADMAP.md`.
+- Stack principal: FastAPI + LangGraph + DuckDB + Streamlit.
+- Arquitectura alineada con `media-catalog-movies` y `media-catalog-vinyls` en versionado, migraciones, snapshots, CI, tests y lanzadores.
 
-Todos los estados intermedios se persisten en tablas de DuckDB.
-No se generan ficheros JSON intermedios en disco.
+## Flujo funcional actual (frontend)
 
-## Estructura de entrada (obligatoria)
+Orden de páginas en la app:
 
-`data/input` debe seguir esta estructura:
+1. `00_extraccion`: alta de imágenes en base de datos para un módulo.
+2. `01_orquestacion`: ejecución por lotes/rango de etapas y control operativo.
+3. `02_revision_manual`: corrección manual de OCR/ISBN, aceptación explícita de
+   libros sin ISBN y salida de review.
+4. `03_formulario`: creación manual, edición y consolidación de la ficha final
+   (`books`), incluso cuando no existe catalogación automática.
+5. `04_exportacion`: salida TXT tabulada para carga externa.
+6. `05_datos`: publicación, listado, importación y limpieza de snapshots DuckDB.
+
+Etapas del workflow backend: `ocr -> metadata -> catalog -> cover`.
+
+## Arquitectura
+
+- `src/project_meta.py`: metadatos de proyecto/versionado desde `pyproject.toml`.
+- `src/backend/main.py`: composición de la aplicación FastAPI y registro de routers.
+- `src/backend/routers`: endpoints separados por dominio (`core`, `ingest`, `workflow`, `books`, `core_books`, `export`, `snapshots`).
+- `src/backend/services`: lógica de OCR, metadata, catálogo, covers, exportación, migraciones y snapshots.
+- `src/backend/schemas`: contratos Pydantic de payloads API.
+- `src/frontend`: app Streamlit multipágina y utilidades compartidas.
+- `scripts`: inicialización, migraciones, mantenimiento DB y snapshots.
+- `tests`: pruebas de import, esquema, migraciones, exportación y snapshots.
+
+DuckDB sigue siendo la fuente única de verdad del estado operativo y de la ficha final.
+La política para evolucionar su esquema está documentada en
+`docs/MIGRATIONS.md`.
+
+El ciclo operativo `sin ficha -> borrador -> consolidada`, sus bloqueos y la
+reapertura explícita están documentados en
+[`docs/FORM_LIFECYCLE.md`](docs/FORM_LIFECYCLE.md).
+
+## Estructura de datos de entrada/salida
+
+Estructura requerida en `data/input`:
 
 ```text
 data/input/
@@ -39,117 +67,293 @@ data/input/
     ...
 ```
 
-- `A`, `B`, `C`: bloques de inventario.
-- `01..99`: modulos.
-- El backend valida esta estructura en la ingesta.
+- Bloques válidos: `A`, `B`, `C`.
+- Módulos válidos: `01..99`.
+- La ejecución trabaja en scope `block + module`.
 
-Ademas, el workflow se ejecuta siempre en scope de modulo (`block + module`).
+Salida de portadas descargadas:
 
-## Persistencia DuckDB
-
-Las tablas principales actuales son:
-
-- `book_items`: estado operativo por libro y columnas de control de pipeline/workflow
-- `book_image_files`: imagenes por libro (una fila por imagen, sin ruta absoluta)
-- `book_ocr_data`: resultado OCR e ISBN derivados
-- `book_bibliographic_sources`: fichas crudas por proveedor (`google`, `isbndb`, `openlibrary`)
-
-Los estados de workflow y de etapas (OCR/metadata/catalog/cover) se centralizan en `book_items`.
-
-La tabla final `books` todavia no se crea en esta fase.
-Queda reservada para el volcado final de catalogacion consolidada (a partir de fichas + OCR de creditos).
-
-## Estructura
-
-- `src/backend`: API, servicios, schemas, workflow
-- `src/frontend`: app Streamlit y paginas por fase
-- `data`: entrada/salida y DuckDB
-- `data/output/exports`: exportaciones finales
-
-## Quick start
-
-```bash
-cp .env.example .env
-make setup
-make dev-back
-# en otro terminal
-make dev-front
+```text
+data/output/covers/<BLOQUE>/<MODULO>/
 ```
 
-Tambien puedes levantar ambos servicios con:
+Salida de exportaciones:
+
+```text
+data/output/exports/
+```
+
+## Modelo de datos (DuckDB)
+
+Tablas/vistas principales:
+
+- `book_items`: estado operativo por item, control de workflow y ciclo de la
+  ficha (`form_status`).
+- `book_image_files`: una fila por imagen asociada a item.
+- `book_ocr_data`: texto OCR e ISBN derivados/consolidados.
+- `book_bibliographic_sources`: payload por proveedor (`google`, `openlibrary`, `isbndb`).
+- `books`: tabla core editable en formulario final.
+- `book_field_allowed_values`: valores cerrados para campos del formulario.
+- `ref.iso_639_3`: referencia de idiomas ISO 639-3 con `spa_name`.
+- `libros_carga_abebooks`: vista de exportación.
+- `schema_migrations`: registro de migraciones aplicadas.
+
+## Preparación de recursos locales
+
+Los recursos de `assets/` no se versionan. Se preparan con:
 
 ```bash
+make prepare-assets
+```
+
+Este target se ejecuta automáticamente desde `make setup` y comprueba lo
+siguiente:
+
+- Descarga y valida `assets/iso-639-3.tab` desde la
+  [tabla oficial de SIL International](https://iso639-3.sil.org/sites/iso639-3/files/downloads/iso-639-3.tab).
+  Este fichero es necesario para poblar `ref.iso_639_3`.
+- Conserva `assets/dani.png` como recurso local opcional. Se puede copiar
+  manualmente o definir `APP_ICON_URL` en `.env` para descargar un PNG. La
+  aplicación funciona sin él usando el icono por defecto de Streamlit.
+
+Para volver a descargar los recursos configurados:
+
+```bash
+python3 scripts/prepare_local_assets.py --force
+```
+
+## Inicio rápido
+
+`GNU Make` es opcional y queda reservado como comodidad para desarrollo. Para
+los lanzadores sólo se necesitan Python 3.12 o posterior y Git.
+
+```bash
+python3 scripts/appctl.py setup
+python3 scripts/appctl.py launch
+```
+
+`setup` crea `.env` desde `.env.example` cuando falta y nunca sobrescribe una
+configuración existente.
+
+También se puede usar `tools/set-up-app.*` una vez y después
+`tools/launch-app.*`. El diagnóstico de la instalación está disponible con
+`tools/doctor-app.*`. El lanzador normal comprueba `origin/main` en cada
+apertura, aplica automáticamente una actualización estable y continúa con la
+versión instalada cuando no hay conexión.
+
+Flujo equivalente para desarrollo:
+
+```bash
+make setup
 make dev
 ```
 
-y detenerlos con:
+Servicios por defecto:
+
+- Backend: `http://127.0.0.1:8000`
+- Frontend: `http://127.0.0.1:8501`
+
+Parada:
 
 ```bash
-make stop
+python3 scripts/appctl.py stop
 ```
 
-El `Makefile` incluye comandos multiplataforma (Ubuntu/Linux y Windows) para arranque y parada de backend/frontend.
-Ademas, `make dev` verifica/crea `.venv` e instala dependencias si faltan.
+## Comandos appctl
 
-## Variables de entorno clave
+- `python3 scripts/appctl.py setup`: prepara la instalación.
+- `python3 scripts/appctl.py launch`: actualiza desde `main`, ejecuta
+  migraciones y arranca en modo estable.
+- `python3 scripts/appctl.py dev`: arranca con recarga y sin actualizar Git.
+- `python3 scripts/appctl.py update`: actualiza explícitamente una instalación
+  limpia situada en `main`.
+- `python3 scripts/appctl.py stop`: detiene la instancia gestionada.
+- `python3 scripts/appctl.py doctor`: comprueba la instalación.
+- `python3 scripts/appctl.py smoke`: arranca ambos servicios con una base
+  temporal y comprueba su salud.
 
-- `DB_PATH`: ruta DuckDB
-- `FRONTEND_THEME_CSS`: ruta CSS para UI (`theme.css` o `theme_legacy.css` en `src/frontend/assets`, o ruta absoluta)
-- `COVERS_DIR`: carpeta de entrada de imagenes
-- `COVERS_OUTPUT_DIR`: carpeta de portadas descargadas
-- `OCR_OUTPUT_DIR`: carpeta opcional con OCR preexistente (`<book_id>.txt`)
-- `OCR_PROVIDER`: `auto`, `openai`, `ollama` o `none` (default: `ollama`)
-- `OPENAI_API_KEY`: habilita OCR con OpenAI
-- `OCR_OPENAI_MODEL`: modelo OCR para OpenAI
-- `OCR_OLLAMA_MODEL`: modelo OCR multimodal para Ollama (default: `glm-ocr:latest`)
-- `OCR_RESIZE_TO_1800_DEFAULT`: default del checkbox de UI para reducir imagen a 1800 px antes de OCR con glm-ocr (`true` por defecto)
-- `OCR_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo OCR Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
-- `OCR_ISBN_OLLAMA_MODEL`: modelo Ollama para extraer ISBN desde el texto OCR (default: `gpt-oss:20b`)
-- `OCR_OLLAMA_FALLBACK_MODELS`: lista CSV opcional de modelos OCR de respaldo en Ollama (default: vacio, sin fallback)
-- `OCR_USE_SIDECAR`: si `true`, usa `OCR_OUTPUT_DIR/<book_id>.txt`; por defecto `false` para OCR real sobre imagen
-- `OLLAMA_BASE_URL`: URL base del servicio Ollama
-- `OLLAMA_TIMEOUT_SECONDS`: timeout para llamadas a Ollama (vacio = sin timeout, valor recomendado si quieres limitar: `120`)
-- `CATALOG_MODEL`: compatibilidad hacia atras (fallback de modelo catalogo)
-- `CATALOG_PROVIDER`: `openai` u `ollama` (si está en `.env`, manda ese valor; fallback interno del backend: `openai`)
-- `CATALOG_OPENAI_MODEL`: modelo de arbitraje para OpenAI
-- `CATALOG_OLLAMA_MODEL`: modelo de arbitraje para Ollama
-- `CATALOG_OLLAMA_MODEL_SUGGESTIONS`: sugerencias CSV para UI de modelo catalogo Ollama (si no está instalado en backend se muestra en gris y no se puede seleccionar)
-- `CATALOG_ARBITER_ENABLED`: activa arbitraje LLM en casos dudosos
-- `CATALOG_ARBITER_PROVIDER`: `auto`, `openai`, `ollama` o `none`
-- `CATALOG_ARBITER_MIN_CONFIDENCE`: umbral para disparar arbitraje
-- `ISBNDB_API_KEY`: clave para ISBNdb
-- `WORKFLOW_MAX_ATTEMPTS`: reintentos automaticos por item
+## Comandos Make para desarrollo
 
-## Temas visuales
+- `make prepare-assets`: descarga y valida los recursos locales necesarios.
+- `make setup`: prepara recursos, crea `.venv` e instala dependencias.
+- `make install`: reinstala dependencias del proyecto.
+- `make lock`: sincroniza `requirements.lock` conservando las versiones fijadas.
+- `make upgrade-lock`: actualiza el lock dentro de los rangos de `pyproject.toml`.
+- `make check-lock`: comprueba que declaración y lock coinciden.
+- `make build`: genera la rueda y el paquete fuente en `dist/`.
+- `make update`: aplica el actualizador estable de `appctl`.
+- `make start`: actualización automática y arranque estable.
+- `make dev`: arranque de desarrollo sin actualización y con recarga.
+- `make dev-back`: solo backend.
+- `make dev-front`: solo frontend.
+- `make init-db`: crea/ajusta esquema de DuckDB mediante migraciones.
+- `make migrate-db`: aplica migraciones explícitamente.
+- `make db-maint`: mantenimiento ligero de DB.
+- `make db-repack`: repack a archivo nuevo.
+- `make db-repack-replace`: repack y reemplazo del archivo original.
+- `make publish-snapshot`: publica snapshot DuckDB.
+- `make list-snapshots`: lista snapshots disponibles.
+- `make import-snapshot SNAPSHOT_ID=<id>`: importa un snapshot confirmado.
+- `make cleanup-snapshots`: elimina snapshots antiguos según retención.
+- `make lint`: ejecuta Ruff y comprueba el formato con Black.
+- `make format`: ejecuta Black.
+- `make test`: ejecuta Pytest.
+- `make stop`: detiene backend y frontend.
+- `make doctor`: ejecuta el diagnóstico de `appctl`.
+- `make smoke`: prueba backend y frontend sin tocar los datos reales.
 
-Puedes alternar el tema de Streamlit cambiando solo la ruta en `.env`:
+El contrato de dependencias, su actualización y la validación multiplataforma
+se detallan en [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
-```bash
-# tema nuevo
-FRONTEND_THEME_CSS=theme.css
+## Configuración por `.env`
 
-# tema inspirado en book_catalog_v0.3
-FRONTEND_THEME_CSS=theme_legacy.css
+La aplicación puede abrirse con los valores generados por `setup`. Ollama es el
+proveedor local predeterminado; las claves de OpenAI e ISBNdb son opcionales.
+La referencia completa, validaciones y resolución de problemas están en
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
+
+Preparación local:
+
+- `APP_ICON_URL`: URL opcional para descargar `assets/dani.png` durante la preparación.
+
+Actualización y arranque:
+
+- `GIT_REMOTE`: remoto del canal estable; por defecto `origin`.
+- `GIT_BRANCH`: rama estable; debe ser `main` en instalaciones de usuario.
+- `APP_UPDATE_TIMEOUT_SECONDS`: espera máxima de la comprobación remota.
+- `APP_STARTUP_TIMEOUT_SECONDS`: espera máxima de salud tras arrancar.
+- `APP_UPDATE_BACKUP_DIR`: backups locales previos a actualizar.
+- `APP_UPDATE_BACKUP_KEEP`: número de backups recientes conservados.
+- `BACK_HOST` / `BACK_PORT`: escucha local del backend.
+- `FRONT_HOST` / `FRONT_PORT`: escucha local del frontend.
+
+Rutas:
+
+- `PROJECT_ROOT`
+- `DB_PATH`
+- `COVERS_DIR`
+- `COVERS_OUTPUT_DIR`
+- `EXPORTS_DIR`
+- `OCR_OUTPUT_DIR`
+
+Snapshots y sincronización:
+
+- `BBDD_DIR`
+- `SYNC_STATE_PATH`
+- `SYNC_ACTOR`
+- `SYNC_DEVICE`
+- `SYNC_RETENTION_DAYS`
+- `SYNC_KEEP_MIN`
+
+OCR:
+
+- `OCR_PROVIDER` (`ollama` u `openai`)
+- `OCR_OLLAMA_MODEL`
+- `OCR_OPENAI_MODEL`
+- `OCR_RESIZE_TO_1800_DEFAULT`
+- `OCR_ISBN_OLLAMA_MODEL`
+- `OCR_OLLAMA_FALLBACK_MODELS`
+- `OCR_USE_SIDECAR`
+- `OLLAMA_BASE_URL`
+- `OLLAMA_TIMEOUT_SECONDS`
+
+Catalogación automática:
+
+- `CATALOG_PROVIDER` (`ollama` u `openai`)
+- `CATALOG_OLLAMA_MODEL`
+- `CATALOG_OPENAI_MODEL`
+- `CATALOG_OLLAMA_MODEL_SUGGESTIONS`
+- `CATALOG_ARBITER_ENABLED`
+- `CATALOG_ARBITER_PROVIDER`
+- `CATALOG_ARBITER_MIN_CONFIDENCE`
+
+APIs y límites:
+
+- `OPENAI_API_KEY`
+- `ISBNDB_API_KEY`
+- `REQUEST_TIMEOUT_SECONDS`
+- `WORKFLOW_MAX_ATTEMPTS`
+- `GOOGLE_BOOKS_MIN_INTERVAL_SECONDS`
+- `OPENLIBRARY_MIN_INTERVAL_SECONDS`
+
+Frontend:
+
+- `API_URL`
+- `API_TIMEOUT_SECONDS`
+- `API_LONG_TIMEOUT_SECONDS`
+- `APP_CHANNEL`
+- `FRONTEND_THEME_CSS`
+
+## Exportación
+
+La exportación usa la vista `libros_carga_abebooks` y aplica filtros por bloque/módulo.
+
+- Formato: TXT delimitado por TAB, con cabecera.
+- Encoding configurable: `windows-1252` (default) o `utf-8`.
+- Endpoint de exportación: `GET /export/books/txt`.
+- Endpoint de exportación por selección: `POST /export/books/txt`.
+- Validación no bloqueante: `GET/POST /export/books/validate`.
+- Descarga de archivo generado: `GET /export/books/file?filename=...`.
+
+Los campos de la ficha final y la vista exportada se mantienen como contrato funcional del proyecto.
+
+## Snapshots
+
+Los snapshots publican una copia compactada de la base DuckDB en:
+
+```text
+<BBDD_DIR>/media-catalog-books/snapshots/
 ```
 
-## Resolucion catalografica
+Cada snapshot incluye manifiesto JSON con `snapshot_id`, versión de app, versión
+real del esquema, origen (`SYNC_ACTOR`/`SYNC_DEVICE`), tamaño y `sha256`.
 
-La fase de catalogacion usa reglas deterministas por campo:
+La importación:
 
-- Normalizacion por fuente (`google`, `open_library`, `isbndb`) a esquema comun
-- Resolucion por consenso entre fuentes y desempate por prioridad
-- Regla especial para editorial: preferencia de nombre comercial sobre forma fiscal
-- Trazabilidad (`provenance`) y calidad (`qa.confidence`, `qa.review_flags`) en `catalog`
-- Arbitro LLM opcional para conflictos/ambiguedades con validacion determinista posterior
-- Si `qa.requires_manual_review=true`, el workflow marca automaticamente el libro en cola de review
+- requiere confirmación explícita (`confirm=true`);
+- verifica hash;
+- rechaza esquemas desconocidos y bases que no pertenecen a Books;
+- valida y migra una copia temporal antes de tocar la base activa;
+- crea backup local antes de reemplazar la DB;
+- restaura la base anterior si falla el registro final;
+- actualiza `SYNC_STATE_PATH`.
 
-## Endpoints principales
+La actualización automática de la aplicación no importa snapshots. Sustituir
+la base local sigue requiriendo confirmación expresa desde la página de datos.
+La operación y sus garantías están detalladas en `docs/SNAPSHOTS.md`.
 
-- `POST /covers/ingest`
-- `GET /models/ollama`
-- `POST /workflow/run`
-- `GET /workflow/graph`
-- `GET /workflow/snapshot`
-- `POST /workflow/review/{book_id}`
-- `GET /books`, `GET /books/{book_id}`
-- `GET /export/books/tsv`
+## Migraciones
+
+El arranque aplica automáticamente las migraciones incrementales pendientes
+antes de iniciar los servicios. Cada migración se ejecuta en una transacción y
+su checksum incluye la implementación completa, de modo que una versión ya
+publicada no se puede modificar silenciosamente.
+
+La compatibilidad se prueba también contra una base sintética generada con la
+release `v0.1.1`, verificando que conserva datos, tablas, columnas y el contrato
+de exportación. Ver `docs/MIGRATIONS.md` para el procedimiento de desarrollo.
+
+## Lanzadores
+
+La carpeta `tools/` contiene lanzadores de doble clic para Windows y Ubuntu/Linux:
+
+- preparar app;
+- arrancar app;
+- detener app;
+- actualizar app.
+
+Ver `tools/README.md`.
+
+## Notas operativas
+
+- No se usan JSON intermedios en disco como mecanismo principal del pipeline.
+- El estado operativo vive en DuckDB.
+- La revisión manual y el formulario escriben directamente en base de datos.
+- Las migraciones incrementales actualizan el esquema sin alterar los campos de negocio.
+
+## Historial
+
+Para cambios por versión, ver `CHANGELOG.md`.
+
+La política `develop -> main -> tag` y la lista de publicación están
+documentadas en `docs/RELEASING.md`.

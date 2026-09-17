@@ -251,10 +251,20 @@ def _prepare_image_for_ocr(
 
             resized = image.resize(new_size, resample)
             suffix = image_path.suffix.lower()
-            if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}:
+            if suffix not in {
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".webp",
+                ".bmp",
+                ".tif",
+                ".tiff",
+            }:
                 suffix = ".jpg"
 
-            temp_file = tempfile.NamedTemporaryFile(prefix="ocr_glm_1800_", suffix=suffix, delete=False)
+            temp_file = tempfile.NamedTemporaryFile(
+                prefix="ocr_glm_1800_", suffix=suffix, delete=False
+            )
             temp_path = Path(temp_file.name)
             temp_file.close()
 
@@ -283,7 +293,10 @@ def _prepare_image_for_ocr(
             preprocess["resized"] = True
             preprocess["reason"] = "resized_for_glm_ocr"
             preprocess["prepared_image"] = str(temp_path)
-            preprocess["prepared_size"] = {"width": int(new_size[0]), "height": int(new_size[1])}
+            preprocess["prepared_size"] = {
+                "width": int(new_size[0]),
+                "height": int(new_size[1]),
+            }
             preprocess["max_side_limit"] = 1800
             return temp_path, preprocess, temp_path
     except Exception as exc:
@@ -305,7 +318,9 @@ def _run_ocr_for_image(
     )
 
     try:
-        text = _ollama_chat_with_image(model=model, image_path=prepared_path, prompt=OCR_TEXT_PROMPT)
+        text = _ollama_chat_with_image(
+            model=model, image_path=prepared_path, prompt=OCR_TEXT_PROMPT
+        )
     finally:
         if temp_path is not None and temp_path.exists():
             try:
@@ -454,7 +469,9 @@ def _compact_isbn_extraction(
     isbn_data: dict[str, Any],
     isbn_error: str | None,
 ) -> dict[str, Any]:
-    candidates = isbn_data.get("isbns") if isinstance(isbn_data.get("isbns"), list) else []
+    candidates = (
+        isbn_data.get("isbns") if isinstance(isbn_data.get("isbns"), list) else []
+    )
     compact_candidates = [str(item) for item in candidates[:5] if str(item).strip()]
 
     return {
@@ -473,13 +490,19 @@ def _compact_isbn_extraction(
 def derive_isbn_from_text(credits_text: str | None) -> dict[str, Any]:
     text = str(credits_text or "")
 
-    raw_candidates = [clean_isbn(match) for match in ISBN_CANDIDATE_PATTERN.findall(text)]
+    raw_candidates = [
+        clean_isbn(match) for match in ISBN_CANDIDATE_PATTERN.findall(text)
+    ]
     raw_candidates = [item for item in raw_candidates if item]
     raw_candidates = _unique(raw_candidates)
 
-    normalized_candidates = _unique([_normalize_ocular_isbn_confusions(item) for item in raw_candidates])
+    normalized_candidates = _unique(
+        [_normalize_ocular_isbn_confusions(item) for item in raw_candidates]
+    )
     valid_candidates = _unique([item for item in raw_candidates if is_valid_isbn(item)])
-    normalized_valid_candidates = _unique([item for item in normalized_candidates if is_valid_isbn(item)])
+    normalized_valid_candidates = _unique(
+        [item for item in normalized_candidates if is_valid_isbn(item)]
+    )
     candidate_details = _isbn_candidate_details(raw_candidates)
     normalized_candidate_details = _isbn_candidate_details(normalized_candidates)
 
@@ -528,8 +551,14 @@ def run_one(
     if existing_status in {"processed", "manual"} and not overwrite:
         return {"id": book_id, "status": "skipped", "reason": "ocr already present"}
 
-    image_paths_raw = [str(path).strip() for path in book.get("image_paths", []) if str(path).strip()]
-    image_paths = [Path(path) for path in image_paths_raw if Path(path).exists() and Path(path).is_file()]
+    image_paths_raw = [
+        str(path).strip() for path in book.get("image_paths", []) if str(path).strip()
+    ]
+    image_paths = [
+        Path(path)
+        for path in image_paths_raw
+        if Path(path).exists() and Path(path).is_file()
+    ]
 
     if not image_paths:
         fallback = books.ensure_local_image_path(book_id)
@@ -577,7 +606,9 @@ def run_one(
             "provider": "ollama",
             "model": selected_model,
             "resize_to_1800_requested": bool(resize_to_1800),
-            "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
+            "resize_to_1800_applied": bool(
+                resize_to_1800 and _is_glm_ocr_model(selected_model)
+            ),
             "ocr_attempts": compact_attempts,
         }
 
@@ -629,7 +660,9 @@ def run_one(
         "provider": "ollama",
         "model": selected_model,
         "resize_to_1800_requested": bool(resize_to_1800),
-        "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
+        "resize_to_1800_applied": bool(
+            resize_to_1800 and _is_glm_ocr_model(selected_model)
+        ),
         "ocr_attempts": compact_attempts,
         "isbn_extraction": compact_isbn,
     }
@@ -655,7 +688,9 @@ def run_one(
         "model": selected_model,
         "isbn_model": selected_isbn_model,
         "resize_to_1800_requested": bool(resize_to_1800),
-        "resize_to_1800_applied": bool(resize_to_1800 and _is_glm_ocr_model(selected_model)),
+        "resize_to_1800_applied": bool(
+            resize_to_1800 and _is_glm_ocr_model(selected_model)
+        ),
         "chars": len(credits_text),
         "isbn_valid": bool(isbn_value),
     }

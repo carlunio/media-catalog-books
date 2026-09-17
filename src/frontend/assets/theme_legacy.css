@@ -128,6 +128,14 @@ div[data-testid="stMetricValue"] {
   color: #f6fbff;
 }
 
+/* Streamlit dimming for "stale" elements (while a rerun is in progress) can be distracting
+   for long-running workflows. We prefer to keep the UI stable and rely on explicit
+   status/progress indicators instead. */
+div[data-testid="stElementContainer"] {
+  opacity: 1 !important;
+  transition: none !important;
+}
+
 .mc-hero {
   border: 1px solid rgba(84, 114, 134, 0.32);
   border-radius: 18px;

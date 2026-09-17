@@ -2,7 +2,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 OcrProvider = Literal["auto", "openai", "ollama", "none"]
 CatalogProvider = Literal["auto", "openai", "ollama", "none"]
 

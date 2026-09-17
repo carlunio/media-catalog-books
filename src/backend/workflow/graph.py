@@ -109,14 +109,22 @@ def _with_failure(book_id: str, *, step: str, error: str) -> WorkflowState:
 def _invalid_ocr_isbn_reason(book: dict[str, Any]) -> str:
     reason = "ocr_isbn_validation: OCR text extracted but no valid ISBN was found"
     trace = book.get("ocr_trace") if isinstance(book.get("ocr_trace"), dict) else {}
-    extraction = trace.get("isbn_extraction") if isinstance(trace.get("isbn_extraction"), dict) else {}
+    extraction = (
+        trace.get("isbn_extraction")
+        if isinstance(trace.get("isbn_extraction"), dict)
+        else {}
+    )
 
     candidates: list[str] = []
     raw_candidates = extraction.get("candidates")
     if isinstance(raw_candidates, list):
         candidates = [str(item) for item in raw_candidates if str(item).strip()]
     else:
-        legacy_result = extraction.get("result") if isinstance(extraction.get("result"), dict) else {}
+        legacy_result = (
+            extraction.get("result")
+            if isinstance(extraction.get("result"), dict)
+            else {}
+        )
         legacy_candidates = legacy_result.get("isbns")
         if isinstance(legacy_candidates, list):
             candidates = [str(item) for item in legacy_candidates if str(item).strip()]
@@ -143,7 +151,13 @@ def _should_route_to_ocr_review(book: dict[str, Any] | None) -> bool:
     ocr_status = str(book.get("ocr_status") or "").strip().lower()
     credits_text = str(book.get("credits_text") or "").strip()
     isbn_text = str(book.get("isbn") or "").strip()
-    return ocr_status in {"processed", "manual"} and bool(credits_text) and not is_valid_isbn(isbn_text)
+    missing_isbn_accepted = bool(book.get("isbn_missing_accepted_at"))
+    return (
+        ocr_status in {"processed", "manual"}
+        and bool(credits_text)
+        and not is_valid_isbn(isbn_text)
+        and not missing_isbn_accepted
+    )
 
 
 def _load_book_node(state: WorkflowState) -> WorkflowState:
@@ -181,9 +195,15 @@ def _apply_action_node(state: WorkflowState) -> WorkflowState:
         books.clear_workflow_review(book_id)
         refreshed = books.get_book(book_id)
         if refreshed is None:
-            return _with_failure(book_id, step="apply_action", error=f"Book not found after approve: {book_id}")
+            return _with_failure(
+                book_id,
+                step="apply_action",
+                error=f"Book not found after approve: {book_id}",
+            )
 
-        resume_stage = _resume_stage_from_pipeline_stage(refreshed.get("pipeline_stage"))
+        resume_stage = _resume_stage_from_pipeline_stage(
+            refreshed.get("pipeline_stage")
+        )
         if resume_stage is None:
             books.set_workflow_done(book_id, node="review_approved")
             return {
@@ -210,7 +230,9 @@ def _apply_action_node(state: WorkflowState) -> WorkflowState:
 
     retry_stage = retry_action_to_stage.get(action)
     if retry_stage is None:
-        return _with_failure(book_id, step="apply_action", error=f"Unsupported action: {action}")
+        return _with_failure(
+            book_id, step="apply_action", error=f"Unsupported action: {action}"
+        )
 
     attempt = books.increment_workflow_attempt(book_id)
     books.reset_from_stage(book_id, retry_stage)
@@ -256,7 +278,9 @@ def _ocr_node(state: WorkflowState) -> WorkflowState:
         overwrite=bool(state.get("overwrite")),
     )
     if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(book_id, step="ocr", error=str(result.get("error") or "OCR failed"))
+        return _with_failure(
+            book_id, step="ocr", error=str(result.get("error") or "OCR failed")
+        )
 
     refreshed = books.get_book(book_id)
     if _should_route_to_ocr_review(refreshed):
@@ -299,7 +323,11 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
 
     result = metadata.run_one(book_id, overwrite=bool(state.get("overwrite")))
     if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(book_id, step="metadata", error=str(result.get("error") or "Metadata fetch failed"))
+        return _with_failure(
+            book_id,
+            step="metadata",
+            error=str(result.get("error") or "Metadata fetch failed"),
+        )
 
     refreshed = books.get_book(book_id)
     if _should_stop_after(state, "metadata"):
@@ -338,7 +366,11 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
         model=state.get("catalog_model"),
     )
     if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(book_id, step="catalog", error=str(result.get("error") or "Catalog build failed"))
+        return _with_failure(
+            book_id,
+            step="catalog",
+            error=str(result.get("error") or "Catalog build failed"),
+        )
 
     refreshed = books.get_book(book_id)
     if _should_stop_after(state, "catalog"):
@@ -367,7 +399,11 @@ def _cover_node(state: WorkflowState) -> WorkflowState:
 
     result = covers.run_one(book_id, overwrite=bool(state.get("overwrite")))
     if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(book_id, step="cover", error=str(result.get("error") or "Cover download failed"))
+        return _with_failure(
+            book_id,
+            step="cover",
+            error=str(result.get("error") or "Cover download failed"),
+        )
 
     refreshed = books.get_book(book_id)
     if _should_stop_after(state, "cover"):
@@ -397,7 +433,9 @@ def _evaluate_node(state: WorkflowState) -> WorkflowState:
 
         attempt = int(state.get("attempt") or 0)
         max_attempts_raw = state.get("max_attempts")
-        max_attempts = WORKFLOW_MAX_ATTEMPTS if max_attempts_raw is None else int(max_attempts_raw)
+        max_attempts = (
+            WORKFLOW_MAX_ATTEMPTS if max_attempts_raw is None else int(max_attempts_raw)
+        )
 
         if failed_step != "apply_action" and attempt < max_attempts:
             return {"route": "retry"}
@@ -446,12 +484,26 @@ def _evaluate_node(state: WorkflowState) -> WorkflowState:
                 "outcome": "review",
             }
 
-        catalog_payload = book.get("catalog") if isinstance(book.get("catalog"), dict) else {}
-        qa_payload = catalog_payload.get("qa") if isinstance(catalog_payload.get("qa"), dict) else {}
+        catalog_payload = (
+            book.get("catalog") if isinstance(book.get("catalog"), dict) else {}
+        )
+        qa_payload = (
+            catalog_payload.get("qa")
+            if isinstance(catalog_payload.get("qa"), dict)
+            else {}
+        )
         if bool(qa_payload.get("requires_manual_review")):
             confidence = qa_payload.get("confidence")
-            review_flags = qa_payload.get("review_flags") if isinstance(qa_payload.get("review_flags"), list) else []
-            flags_text = ", ".join(str(flag) for flag in review_flags[:6]) if review_flags else "low catalog confidence"
+            review_flags = (
+                qa_payload.get("review_flags")
+                if isinstance(qa_payload.get("review_flags"), list)
+                else []
+            )
+            flags_text = (
+                ", ".join(str(flag) for flag in review_flags[:6])
+                if review_flags
+                else "low catalog confidence"
+            )
             reason = f"catalog_quality confidence={confidence} flags={flags_text}"
             books.set_workflow_review(
                 book_id,
@@ -478,7 +530,9 @@ def _retry_node(state: WorkflowState) -> WorkflowState:
 
     attempt = books.increment_workflow_attempt(book_id)
     books.reset_from_stage(book_id, retry_stage)
-    books.set_workflow_running(book_id, node=f"retry_{retry_stage}", action="auto_retry")
+    books.set_workflow_running(
+        book_id, node=f"retry_{retry_stage}", action="auto_retry"
+    )
 
     refreshed = books.get_book(book_id)
 

@@ -107,12 +107,20 @@ def snapshot(
     rows = books.list_books(limit=limit, block=block, module=module)
     stage_counts: dict[str, int] = defaultdict(int)
     workflow_status_counts: dict[str, int] = defaultdict(int)
+    form_status_counts: dict[str, int] = defaultdict(int)
     running_nodes: dict[str, int] = defaultdict(int)
 
     for row in rows:
         stage_counts[_stage_bucket(row.get("pipeline_stage"))] += 1
-        status = str(row.get("workflow_status") or "pending").strip().lower() or "pending"
+        status = (
+            str(row.get("workflow_status") or "pending").strip().lower() or "pending"
+        )
         workflow_status_counts[status] += 1
+        form_status = (
+            str(row.get("form_status") or "not_started").strip().lower()
+            or "not_started"
+        )
+        form_status_counts[form_status] += 1
         if status == "running":
             node = str(row.get("workflow_current_node") or "unknown")
             running_nodes[node] += 1
@@ -143,6 +151,7 @@ def snapshot(
         "total_considered": len(rows),
         "stage_counts": dict(stage_counts),
         "workflow_status_counts": dict(workflow_status_counts),
+        "form_status_counts": dict(form_status_counts),
         "running_nodes": dict(running_nodes),
         "review_queue_size": len(review_rows),
         "review_queue": review_queue,
@@ -166,8 +175,15 @@ def run_one(
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
 
-    if books.get_book(book_id) is None:
+    book = books.get_book(book_id)
+    if book is None:
         return {"id": book_id, "status": "error", "error": "Book not found"}
+    if str(book.get("form_status") or "").strip().lower() == "consolidated":
+        return {
+            "id": book_id,
+            "status": "skipped",
+            "reason": "La ficha está consolidada y no admite procesos automáticos.",
+        }
 
     result_state = _invoke_graph(
         {
@@ -189,7 +205,11 @@ def run_one(
     book = books.get_book(book_id)
 
     if book is None:
-        return {"id": book_id, "status": "error", "error": "Book disappeared after workflow run"}
+        return {
+            "id": book_id,
+            "status": "error",
+            "error": "Book disappeared after workflow run",
+        }
 
     failed_step = result_state.get("failed_step")
     error = result_state.get("error")
@@ -255,7 +275,9 @@ def run_batch(
                 "scope": {"block": scope_block, "module": scope_module},
                 "requested": 1,
                 "processed": 1,
-                "items": [{"id": book_id, "status": "error", "error": "Book not found"}],
+                "items": [
+                    {"id": book_id, "status": "error", "error": "Book not found"}
+                ],
             }
 
         target_block = str(target_book.get("block") or "").strip().upper()
@@ -354,7 +376,11 @@ def _review_origin_stage(book: dict[str, Any]) -> str | None:
         node = node.split("_", 1)[1].strip()
 
     for stage in ("ocr", "metadata", "catalog", "cover"):
-        if node == stage or node.startswith(f"{stage}_") or node.startswith(f"{stage}:"):
+        if (
+            node == stage
+            or node.startswith(f"{stage}_")
+            or node.startswith(f"{stage}:")
+        ):
             return stage
 
     for stage in ("ocr", "metadata", "catalog", "cover"):
@@ -370,6 +396,12 @@ def _mark_stage_as_manually_approved(book: dict[str, Any], *, stage: str) -> Non
         raise ValueError("Book id is missing")
 
     if stage == "ocr":
+        accepts_missing_isbn = (
+            str(book.get("workflow_review_reason") or "")
+            .strip()
+            .lower()
+            .startswith("ocr_isbn_validation")
+        )
         trace_payload = book.get("ocr_trace")
         if not isinstance(trace_payload, (dict, list)):
             trace_payload = {}
@@ -384,6 +416,8 @@ def _mark_stage_as_manually_approved(book: dict[str, Any], *, stage: str) -> Non
             trace=trace_payload,
             error=None,
         )
+        if accepts_missing_isbn and not str(book.get("isbn") or "").strip():
+            books.accept_missing_isbn(book_id)
         return
 
     if stage == "metadata":
@@ -455,7 +489,8 @@ def _approve_review_without_running(book_id: str) -> dict[str, Any]:
         "id": book_id,
         "status": "approved",
         "origin_stage": origin_stage,
-        "target_stage": str(final_book.get("pipeline_stage") or "").strip().lower() or None,
+        "target_stage": str(final_book.get("pipeline_stage") or "").strip().lower()
+        or None,
         "workflow_status": final_book.get("workflow_status"),
         "workflow_current_node": final_book.get("workflow_current_node"),
         "workflow_needs_review": final_book.get("workflow_needs_review"),
@@ -504,22 +539,32 @@ def review_action(
     )
 
 
-def mark_review(book_id: str, *, reason: str | None = None, node: str = "manual") -> dict[str, Any]:
+def mark_review(
+    book_id: str, *, reason: str | None = None, node: str = "manual"
+) -> dict[str, Any]:
     book = books.get_book(book_id)
     if book is None:
         raise ValueError("Book not found")
+    if str(book.get("form_status") or "").strip().lower() == "consolidated":
+        raise ValueError("La ficha está consolidada; reábrela antes de revisarla.")
 
     text = (reason or "").strip()
     if not text:
         text = "Marked for manual review from Streamlit orchestration page"
 
-    books.set_workflow_review(book_id, node=node.strip() or "manual", reason=text, error=None)
+    books.set_workflow_review(
+        book_id, node=node.strip() or "manual", reason=text, error=None
+    )
     updated = books.get_book(book_id)
     return {
         "id": book_id,
         "status": "review",
         "workflow_status": updated.get("workflow_status") if updated else None,
-        "workflow_needs_review": updated.get("workflow_needs_review") if updated else True,
-        "workflow_review_reason": updated.get("workflow_review_reason") if updated else text,
+        "workflow_needs_review": (
+            updated.get("workflow_needs_review") if updated else True
+        ),
+        "workflow_review_reason": (
+            updated.get("workflow_review_reason") if updated else text
+        ),
         "pipeline_stage": updated.get("pipeline_stage") if updated else "review",
     }
