@@ -15,13 +15,11 @@ def _file_size_mb(path: Path) -> float:
 
 def _prune_catalog_raw_output(con: duckdb.DuckDBPyConnection) -> int:
     try:
-        rows = con.execute(
-            """
+        rows = con.execute("""
             SELECT book_id, CAST(payload_json AS VARCHAR) AS payload_text
             FROM book_payloads
             WHERE payload_type = 'catalog'
-            """
-        ).fetchall()
+            """).fetchall()
     except Exception:
         return 0
 
@@ -57,7 +55,9 @@ def _prune_catalog_raw_output(con: duckdb.DuckDBPyConnection) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DuckDB maintenance for media-catalog-books")
+    parser = argparse.ArgumentParser(
+        description="DuckDB maintenance for media-catalog-books"
+    )
     parser.add_argument(
         "--db",
         default="data/books.duckdb",
@@ -121,7 +121,9 @@ def main() -> int:
         with duckdb.connect(str(db_path)) as con:
             db_list = con.execute("PRAGMA database_list").fetchall()
             if not db_list:
-                raise SystemExit("Unable to resolve current DuckDB catalog name for repack")
+                raise SystemExit(
+                    "Unable to resolve current DuckDB catalog name for repack"
+                )
             catalog_name = str(db_list[0][1])
             con.execute(f"ATTACH '{repacked_path.as_posix()}' AS repacked")
             con.execute(f'COPY FROM DATABASE "{catalog_name}" TO repacked')

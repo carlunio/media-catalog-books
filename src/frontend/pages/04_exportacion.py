@@ -34,7 +34,12 @@ show_backend_status()
 st.write("Exporta la vista `libros_carga_abebooks` en TXT tabulado (TAB + cabecera).")
 
 current_block, current_module = get_selected_scope()
-block = st.selectbox("Bloque", BLOCK_OPTIONS, index=BLOCK_OPTIONS.index(current_block), key="export_block_selector")
+block = st.selectbox(
+    "Bloque",
+    BLOCK_OPTIONS,
+    index=BLOCK_OPTIONS.index(current_block),
+    key="export_block_selector",
+)
 available_modules = list_existing_modules(block)
 modules_key = f"export_modules_selected_{block}"
 
@@ -45,17 +50,25 @@ if available_modules:
         else:
             st.session_state[modules_key] = [available_modules[0]]
     else:
-        current_values = [str(item).zfill(2) for item in st.session_state.get(modules_key, [])]
+        current_values = [
+            str(item).zfill(2) for item in st.session_state.get(modules_key, [])
+        ]
         filtered_values = [item for item in current_values if item in available_modules]
         if filtered_values != current_values:
             st.session_state[modules_key] = filtered_values
 
-    selected_modules = st.multiselect("Modulos", options=available_modules, key=modules_key)
+    selected_modules = st.multiselect(
+        "Modulos", options=available_modules, key=modules_key
+    )
 else:
     selected_modules = []
     st.warning(f"No hay módulos para el bloque {block}.")
 
-selected_modules = [str(item).zfill(2) for item in selected_modules if str(item).zfill(2) in available_modules]
+selected_modules = [
+    str(item).zfill(2)
+    for item in selected_modules
+    if str(item).zfill(2) in available_modules
+]
 set_selected_scope(block, selected_modules[0] if selected_modules else None)
 
 if selected_modules:
@@ -75,7 +88,11 @@ encoding = st.selectbox(
 
 export_disabled = not prefixes
 if st.button("Exportar TXT", type="primary", disabled=export_disabled):
-    params = {"block": block, "modules": ",".join(selected_modules), "encoding": encoding}
+    params = {
+        "block": block,
+        "modules": ",".join(selected_modules),
+        "encoding": encoding,
+    }
     try:
         result = api_get("/export/books/txt", params=params, timeout=180.0)
         path = Path(str(result.get("path") or "data/output/exports/books.txt"))
@@ -85,7 +102,9 @@ if st.button("Exportar TXT", type="primary", disabled=export_disabled):
         st.success(f"Exportado en servidor: {path} ({rows} filas, {used_encoding})")
 
         try:
-            file_bytes = api_get_bytes("/export/books/file", params={"filename": filename}, timeout=180.0)
+            file_bytes = api_get_bytes(
+                "/export/books/file", params={"filename": filename}, timeout=180.0
+            )
             st.session_state["export_last_file_bytes"] = file_bytes
             st.session_state["export_last_file_name"] = filename
             st.session_state["export_last_file_mime"] = "text/plain"
@@ -93,7 +112,9 @@ if st.button("Exportar TXT", type="primary", disabled=export_disabled):
             st.session_state.pop("export_last_file_bytes", None)
             st.session_state.pop("export_last_file_name", None)
             st.session_state.pop("export_last_file_mime", None)
-            st.warning(f"El fichero se guardo en el servidor, pero no se pudo preparar la descarga: {exc}")
+            st.warning(
+                f"El fichero se guardo en el servidor, pero no se pudo preparar la descarga: {exc}"
+            )
 
         if path.exists():
             st.caption(f"Tamano: {path.stat().st_size} bytes")
@@ -113,13 +134,19 @@ if isinstance(download_bytes, (bytes, bytearray)) and str(download_name or "").s
     )
 
 st.subheader("Preview de exportación")
-preview_limit = st.number_input("Filas maximas", min_value=10, max_value=5000, value=300, step=10)
+preview_limit = st.number_input(
+    "Filas maximas", min_value=10, max_value=5000, value=300, step=10
+)
 
 if prefixes:
     try:
         payload = api_get(
             "/export/books/preview",
-            params={"block": block, "modules": ",".join(selected_modules), "limit": int(preview_limit)},
+            params={
+                "block": block,
+                "modules": ",".join(selected_modules),
+                "limit": int(preview_limit),
+            },
             timeout=60.0,
         )
         rows = payload.get("rows", []) if isinstance(payload, dict) else []

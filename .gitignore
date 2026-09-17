@@ -8,6 +8,9 @@ __pycache__/
 .streamlit/
 .pytest_cache/
 .ruff_cache/
+.runtime/
+/build/
+/dist/
 notebooks/*
 
 # Keep only the data folder structure in git:
@@ -55,6 +58,29 @@ notebooks/*
 
 /exports/
 
-# Keep assets folder present but empty (only placeholder).
+# Keep local assets out of Git. Only their preparation notes are versioned.
 /assets/*
 !/assets/.gitkeep
+!/assets/README.md
+
+# Generated local tooling
+/.agents/
+/ocr_output/
+
+# DuckDB temporary files
+*.duckdb.wal
+
+# Additional local environments
+.env.*
+!.env.example
+
+# Test, IDE and OS artifacts
+.coverage
+.coverage.*
+/htmlcov/
+.mypy_cache/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

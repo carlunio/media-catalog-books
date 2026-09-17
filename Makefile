@@ -50,6 +50,9 @@ INIT_DB_SCRIPT := $(MAKEFILE_DIR)/scripts/init_db.py
 DB_MAINT_SCRIPT := $(MAKEFILE_DIR)/scripts/db_maintenance.py
 MIGRATIONS_SCRIPT := $(MAKEFILE_DIR)/scripts/migrate_db.py
 SNAPSHOTS_SCRIPT := $(MAKEFILE_DIR)/scripts/snapshots.py
+PREPARE_ASSETS_SCRIPT := $(MAKEFILE_DIR)/scripts/prepare_local_assets.py
+APPCTL_SCRIPT := $(MAKEFILE_DIR)/scripts/appctl.py
+LOCK_SCRIPT := $(MAKEFILE_DIR)/scripts/lock_dependencies.py
 GIT_REMOTE ?= origin
 GIT_BRANCH ?= main
 DB_PATH ?= data/books.duckdb
@@ -63,26 +66,37 @@ FRONT_PORT ?= 8501
 # =========================
 # PHONY
 # =========================
-.PHONY: setup install update-repo update ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart clean lint format test
+.PHONY: prepare-assets setup install lock upgrade-lock check-lock build update start ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart doctor smoke clean lint format test
+
+prepare-assets:
+	$(PYTHON_BOOTSTRAP) "$(PREPARE_ASSETS_SCRIPT)"
 
 setup:
-	$(PYTHON_BOOTSTRAP) -m venv "$(VENV)"
-	"$(PYTHON)" -m pip install --upgrade pip
-	"$(PYTHON)" -m pip install -e ".[dev]"
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup
 
 install:
-	"$(PYTHON)" -m pip install -e ".[dev]"
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup
 
-update-repo:
-	git pull $(GIT_REMOTE) $(GIT_BRANCH)
+lock:
+	"$(PYTHON)" "$(LOCK_SCRIPT)"
 
-update: update-repo
-	$(MAKE) ensure-env
-	$(MAKE) install
+upgrade-lock:
+	"$(PYTHON)" "$(LOCK_SCRIPT)" --upgrade
+
+check-lock:
+	"$(PYTHON)" "$(LOCK_SCRIPT)" --check
+
+build: ensure-env
+	"$(PYTHON)" -m build --no-isolation
+
+update:
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" update
+
+start:
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" launch
 
 ensure-env:
-	@$(PYTHON_BOOTSTRAP) -c "import pathlib, sys; sys.exit(0 if pathlib.Path(r'$(PYTHON)').exists() else 1)" || $(MAKE) setup
-	@"$(PYTHON)" -c "import importlib.util, sys; mods=('uvicorn','streamlit','fastapi','pytest','ruff','black'); sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)" || $(MAKE) install
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup
 
 init-db: ensure-env
 	"$(PYTHON)" "$(INIT_DB_SCRIPT)"
@@ -127,8 +141,8 @@ endif
 	@$(MAKE) stop-front
 	$(STREAMLIT) run "$(FRONTEND_APP)" --server.port $(FRONT_PORT)
 
-dev: ensure-env init-db
-	$(MAKE) -j 2 SKIP_ENSURE=1 dev-back dev-front
+dev:
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" dev
 
 stop-back:
 	@echo "Stopping backend (port $(BACK_PORT))"
@@ -138,17 +152,25 @@ stop-front:
 	@echo "Stopping frontend (port $(FRONT_PORT))"
 	@$(STOP_FRONT)
 
-stop: stop-back stop-front
+stop:
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" stop
 
 restart:
 	$(MAKE) stop
 	$(MAKE) dev
+
+doctor:
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" doctor
+
+smoke: ensure-env
+	"$(PYTHON)" "$(APPCTL_SCRIPT)" smoke
 
 clean:
 	$(RM_VENV)
 
 lint: ensure-env
 	$(RUFF) check src scripts tests
+	$(BLACK) --check src scripts tests
 
 format: ensure-env
 	$(BLACK) src scripts tests

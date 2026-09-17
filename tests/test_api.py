@@ -67,10 +67,10 @@ def test_backend_imports_without_external_api_keys(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert app.version == "0.1.0"
+    assert app.version == "0.1.1"
 
 
-def test_schema_is_initialized_with_migration_baseline(tmp_path, monkeypatch):
+def test_schema_is_initialized_with_incremental_migrations(tmp_path, monkeypatch):
     _load_app(tmp_path, monkeypatch)
 
     with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
@@ -88,7 +88,15 @@ def test_schema_is_initialized_with_migration_baseline(tmp_path, monkeypatch):
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall()
         assert migrations == [
-            ("0001_baseline", "Registra el esquema actual como baseline")
+            ("0001_baseline", "Registra el esquema actual como baseline"),
+            (
+                "0002_v0_1_1",
+                "Añade trazabilidad de workflow y formato de precio publicado",
+            ),
+            (
+                "0003_form_lifecycle",
+                "Añade borrador, consolidación y aceptación de libros sin ISBN",
+            ),
         ]
 
         relation = con.execute(
@@ -102,6 +110,199 @@ def test_schema_is_initialized_with_migration_baseline(tmp_path, monkeypatch):
         ).fetchone()
         assert relation is not None
         assert str(relation[0]).upper() == "VIEW"
+
+
+def test_manual_form_lifecycle_protects_a_consolidated_book(tmp_path, monkeypatch):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    book_id = "01A0001"
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        con.execute(
+            """
+            INSERT INTO book_items (id, block, module, seq)
+            VALUES (?, 'A', '01', '0001')
+            """,
+            [book_id],
+        )
+
+    candidates = client.get(
+        "/core-books", params={"block": "A", "module": "01", "limit": 20}
+    )
+    assert candidates.status_code == 200
+    assert candidates.json() == [
+        {
+            "id": book_id,
+            "titulo": None,
+            "autor": None,
+            "editorial": None,
+            "estado_stock": None,
+            "estado_carga": None,
+            "precio": None,
+            "block": "A",
+            "module": "01",
+            "form_status": "not_started",
+            "form_consolidated_at": None,
+            "has_core_book": False,
+        }
+    ]
+    assert client.get(f"/core-books/{book_id}").status_code == 404
+
+    created = client.post(f"/core-books/{book_id}/create")
+    assert created.status_code == 200
+    assert created.json()["book"]["form_status"] == "draft"
+
+    saved = client.put(
+        f"/core-books/{book_id}",
+        json={
+            "fields": {"titulo": "Ficha manual", "autor": "Autora, Ana"},
+            "recompute_description": False,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["book"]["titulo"] == "Ficha manual"
+
+    consolidated = client.post(f"/core-books/{book_id}/consolidate")
+    assert consolidated.status_code == 200
+    assert consolidated.json()["book"]["form_status"] == "consolidated"
+    assert consolidated.json()["book"]["form_consolidated_at"]
+
+    blocked_edit = client.put(
+        f"/core-books/{book_id}",
+        json={"fields": {"titulo": "No debe guardarse"}},
+    )
+    assert blocked_edit.status_code == 409
+    blocked_sync = client.post(
+        f"/core-books/{book_id}/sync", params={"force_overwrite": "true"}
+    )
+    assert blocked_sync.status_code == 409
+
+    blocked_workflow = client.post(
+        "/workflow/run",
+        json={
+            "book_id": book_id,
+            "block": "A",
+            "module": "01",
+            "start_stage": "ocr",
+            "overwrite": True,
+        },
+    )
+    assert blocked_workflow.status_code == 200
+    assert blocked_workflow.json()["items"][0]["status"] == "skipped"
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        state = con.execute(
+            """
+            SELECT form_status, workflow_status, workflow_current_node,
+                   pipeline_stage, workflow_needs_review
+            FROM book_items
+            WHERE id = ?
+            """,
+            [book_id],
+        ).fetchone()
+        title = con.execute(
+            "SELECT titulo FROM books WHERE id = ?", [book_id]
+        ).fetchone()
+    assert state == ("consolidated", "done", "form_consolidated", "done", False)
+    assert title == ("Ficha manual",)
+
+    stats = client.get("/stats", params={"block": "A", "module": "01"})
+    assert stats.status_code == 200
+    assert stats.json() == {
+        "total": 1,
+        "needs_ocr": 0,
+        "needs_metadata": 0,
+        "needs_catalog": 0,
+        "needs_cover": 0,
+        "needs_workflow_review": 0,
+        "form_consolidated": 1,
+    }
+
+    reopened = client.post(f"/core-books/{book_id}/reopen")
+    assert reopened.status_code == 200
+    assert reopened.json()["book"]["form_status"] == "draft"
+    edited = client.put(
+        f"/core-books/{book_id}",
+        json={"fields": {"titulo": "Ficha corregida"}},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["book"]["titulo"] == "Ficha corregida"
+
+
+def test_approved_book_without_isbn_can_continue_to_catalog(tmp_path, monkeypatch):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    book_id = "01A0002"
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        con.execute(
+            """
+            INSERT INTO book_items (
+                id, block, module, seq, ocr_status,
+                workflow_status, workflow_current_node,
+                workflow_needs_review, workflow_review_reason, pipeline_stage
+            )
+            VALUES (
+                ?, 'A', '01', '0002', 'processed',
+                'review', 'ocr_isbn_validation',
+                TRUE, 'ocr_isbn_validation: no valid ISBN', 'review'
+            )
+            """,
+            [book_id],
+        )
+        con.execute(
+            """
+            INSERT INTO book_ocr_data (book_id, extracted_text)
+            VALUES (?, 'Título y créditos suficientes, pero sin ISBN')
+            """,
+            [book_id],
+        )
+
+    approved = client.post(
+        f"/workflow/review/{book_id}",
+        json={"action": "approve"},
+    )
+    assert approved.status_code == 200
+    result = approved.json()["result"]
+    assert result["status"] == "approved"
+    assert result["target_stage"] == "metadata"
+
+    after_approval = client.get(f"/books/{book_id}").json()
+    assert after_approval["isbn"] is None
+    assert after_approval["isbn_missing_accepted_at"]
+    assert after_approval["workflow_needs_review"] is False
+
+    metadata = client.post(
+        "/metadata/fetch",
+        json={
+            "book_id": book_id,
+            "block": "A",
+            "module": "01",
+            "overwrite": False,
+        },
+    )
+    assert metadata.status_code == 200, metadata.text
+    assert metadata.json()["items"][0]["status"] == "partial"
+
+    after_metadata = client.get(f"/books/{book_id}").json()
+    assert after_metadata["metadata_status"] == "skipped"
+    assert after_metadata["pipeline_stage"] == "catalog"
+    assert after_metadata["workflow_needs_review"] is False
+
+    graph = importlib.import_module("src.backend.workflow.graph")
+    catalog = importlib.import_module("src.backend.services.catalog")
+    monkeypatch.setattr(
+        catalog,
+        "_call_catalog_llm",
+        lambda **_kwargs: '{"titulo": "Libro sin ISBN", "autor": ["Autora, Ana"]}',
+    )
+    assert graph._should_route_to_ocr_review(after_metadata) is False
+
+    catalog_result = catalog.run_one(book_id, overwrite=False)
+    assert catalog_result["status"] == "built"
+    core_book = client.get(f"/core-books/{book_id}").json()
+    assert core_book["titulo"] == "Libro sin ISBN"
+    assert core_book["form_status"] == "draft"
 
 
 def test_export_view_and_preview_contract(tmp_path, monkeypatch):
@@ -160,6 +361,7 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
     status = client.get("/snapshots/status")
     assert status.status_code == 200
     assert status.json()["local_db_exists"] is True
+    assert status.json()["schema_version"] == "0003_form_lifecycle"
 
     published = client.post(
         "/snapshots/publish",
@@ -169,6 +371,9 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
     snapshot = published.json()["snapshot"]
     snapshot_id = snapshot["snapshot_id"]
     assert snapshot["valid"] is True
+    assert snapshot["importable"] is True
+    assert snapshot["compatibility"] == "current"
+    assert snapshot["schema_version"] == "0003_form_lifecycle"
 
     listed = client.get("/snapshots")
     assert listed.status_code == 200
@@ -179,3 +384,11 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
         json={"snapshot_id": snapshot_id, "confirm": False},
     )
     assert blocked_import.status_code == 400
+
+    imported = client.post(
+        "/snapshots/import",
+        json={"snapshot_id": snapshot_id, "confirm": True},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["migration"]["schema_version"] == "0003_form_lifecycle"
+    assert imported.json()["restart_required"] is True

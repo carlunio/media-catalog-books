@@ -7,7 +7,9 @@ router = APIRouter()
 
 
 @router.post("/core-books/bootstrap")
-def bootstrap_core_books(block: str | None = None, module: str | None = None, limit: int = 2000):
+def bootstrap_core_books(
+    block: str | None = None, module: str | None = None, limit: int = 2000
+):
     if limit < 1 or limit > 50000:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
     try:
@@ -18,10 +20,41 @@ def bootstrap_core_books(block: str | None = None, module: str | None = None, li
 
 @router.post("/core-books/{book_id}/sync")
 def sync_core_book(book_id: str, force_overwrite: bool = True):
-    item = books.sync_core_book_from_catalog(book_id, force_overwrite=bool(force_overwrite))
+    try:
+        item = books.sync_core_book_from_catalog(
+            book_id, force_overwrite=bool(force_overwrite)
+        )
+    except books.CoreBookLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Core book not found")
     return {"ok": True, "book": item, "force_overwrite": bool(force_overwrite)}
+
+
+@router.post("/core-books/{book_id}/create")
+def create_core_book(book_id: str):
+    item = books.create_core_book_draft(book_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return {"ok": True, "book": item}
+
+
+@router.post("/core-books/{book_id}/consolidate")
+def consolidate_core_book(book_id: str):
+    try:
+        item = books.consolidate_core_book(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "book": item}
+
+
+@router.post("/core-books/{book_id}/reopen")
+def reopen_core_book(book_id: str):
+    try:
+        item = books.reopen_core_book(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "book": item}
 
 
 @router.get("/core-books/options")
@@ -30,7 +63,9 @@ def core_books_options():
 
 
 @router.get("/core-books")
-def list_core_books(limit: int = 500, block: str | None = None, module: str | None = None):
+def list_core_books(
+    limit: int = 500, block: str | None = None, module: str | None = None
+):
     if limit < 1 or limit > 50000:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
     try:
@@ -40,7 +75,7 @@ def list_core_books(limit: int = 500, block: str | None = None, module: str | No
 
 
 @router.get("/core-books/{book_id}")
-def get_core_book(book_id: str, bootstrap: bool = True):
+def get_core_book(book_id: str, bootstrap: bool = False):
     item = books.get_core_book(book_id, bootstrap=bootstrap)
     if item is None:
         raise HTTPException(status_code=404, detail="Core book not found")
@@ -55,6 +90,8 @@ def update_core_book(book_id: str, payload: UpdateCoreBookRequest):
             fields=payload.fields,
             recompute_description=bool(payload.recompute_description),
         )
+    except books.CoreBookLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "book": item}

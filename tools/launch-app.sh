@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec "$SCRIPT_DIR/run-make-target.sh" dev "Arrancando la aplicación"
+exec "$SCRIPT_DIR/run-appctl.sh" launch "Arrancando la aplicación"

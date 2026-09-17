@@ -1,3 +1,3 @@
 @echo off
 chcp 65001 >nul
-call "%~dp0run-make-target.bat" dev "Arrancando la aplicación"
+call "%~dp0run-appctl.bat" launch "Arrancando la aplicación"

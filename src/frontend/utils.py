@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -26,6 +27,9 @@ THEME_APPLIED_KEY = "_ui_theme_applied"
 THEME_CSS_ENV_VAR = "FRONTEND_THEME_CSS"
 DEFAULT_THEME_CSS_PATH = Path(__file__).resolve().parent / "assets" / "theme.css"
 APP_ICON_PATH = Path(__file__).resolve().parents[2] / "assets" / "dani.png"
+UPDATE_STATUS_PATH = (
+    Path(__file__).resolve().parents[2] / ".runtime" / "last-update.json"
+)
 
 
 def _normalize_provider(value: str | None, *, fallback: str) -> str:
@@ -66,14 +70,28 @@ DEFAULT_TIMEOUT_SECONDS = _as_float(os.getenv("API_TIMEOUT_SECONDS"), 90.0)
 LONG_TIMEOUT_SECONDS = _as_float(os.getenv("API_LONG_TIMEOUT_SECONDS"), 900.0)
 
 OCR_PROVIDER_DEFAULT = _normalize_provider(os.getenv("OCR_PROVIDER"), fallback="ollama")
-OCR_OPENAI_MODEL_DEFAULT = str(os.getenv("OCR_OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini").strip()
-OCR_OLLAMA_MODEL_DEFAULT = str(os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest") or "glm-ocr:latest").strip()
-OCR_RESIZE_TO_1800_DEFAULT = _as_bool(os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), fallback=True)
+OCR_OPENAI_MODEL_DEFAULT = str(
+    os.getenv("OCR_OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+).strip()
+OCR_OLLAMA_MODEL_DEFAULT = str(
+    os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest") or "glm-ocr:latest"
+).strip()
+OCR_RESIZE_TO_1800_DEFAULT = _as_bool(
+    os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), fallback=True
+)
 
-CATALOG_PROVIDER_DEFAULT = _normalize_provider(os.getenv("CATALOG_PROVIDER"), fallback="openai")
-CATALOG_MODEL_DEFAULT = str(os.getenv("CATALOG_MODEL", "gpt-4o-mini") or "gpt-4o-mini").strip()
-CATALOG_OPENAI_MODEL_DEFAULT = str(os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL_DEFAULT) or CATALOG_MODEL_DEFAULT).strip()
-CATALOG_OLLAMA_MODEL_DEFAULT = str(os.getenv("CATALOG_OLLAMA_MODEL", "qwen2.5:14b") or "qwen2.5:14b").strip()
+CATALOG_PROVIDER_DEFAULT = _normalize_provider(
+    os.getenv("CATALOG_PROVIDER"), fallback="ollama"
+)
+CATALOG_MODEL_DEFAULT = str(
+    os.getenv("CATALOG_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+).strip()
+CATALOG_OPENAI_MODEL_DEFAULT = str(
+    os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL_DEFAULT) or CATALOG_MODEL_DEFAULT
+).strip()
+CATALOG_OLLAMA_MODEL_DEFAULT = str(
+    os.getenv("CATALOG_OLLAMA_MODEL", "qwen2.5:14b") or "qwen2.5:14b"
+).strip()
 
 OCR_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
     os.getenv("OCR_OLLAMA_MODEL_SUGGESTIONS"),
@@ -81,7 +99,13 @@ OCR_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
 )
 CATALOG_OLLAMA_MODEL_SUGGESTIONS = _as_csv_models(
     os.getenv("CATALOG_OLLAMA_MODEL_SUGGESTIONS"),
-    default=[CATALOG_OLLAMA_MODEL_DEFAULT, "qwen2.5:14b", "qwen3:14b", "qwen2.5:7b", "llama3.1:8b"],
+    default=[
+        CATALOG_OLLAMA_MODEL_DEFAULT,
+        "qwen2.5:14b",
+        "qwen3:14b",
+        "qwen2.5:7b",
+        "llama3.1:8b",
+    ],
 )
 
 
@@ -157,6 +181,23 @@ def configure_page(title: str = "Media Catalog Books") -> None:
     st.sidebar.caption(f"Versión: {APP_META.display_version}")
     if APP_META.changelog_path.exists():
         st.sidebar.caption(f"Cambios: {APP_META.changelog_path.name}")
+    try:
+        update_status = json.loads(UPDATE_STATUS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        update_status = {}
+    if not isinstance(update_status, dict):
+        update_status = {}
+    status = str(update_status.get("status") or "")
+    if status == "updated":
+        st.sidebar.caption(
+            f"Actualización aplicada: {update_status.get('new_version') or APP_META.version}"
+        )
+    elif status == "offline":
+        st.sidebar.caption("Sin conexión: usando la versión instalada")
+    elif status in {"failed", "rolled_back"}:
+        st.sidebar.warning("Actualización revertida; se conserva la versión anterior")
+    elif status in {"skipped", "unavailable"}:
+        st.sidebar.caption("Actualización automática omitida")
 
 
 def _url(path: str) -> str:
@@ -229,7 +270,9 @@ def show_backend_status() -> None:
     st.error(f"Backend no disponible: {API_URL} ({last_exc})")
 
 
-def load_stats(*, block: str | None = None, module: str | None = None) -> dict[str, int]:
+def load_stats(
+    *, block: str | None = None, module: str | None = None
+) -> dict[str, int]:
     try:
         params: dict[str, Any] = {}
         if block and module:
@@ -238,7 +281,11 @@ def load_stats(*, block: str | None = None, module: str | None = None) -> dict[s
 
         payload = api_get("/stats", params=params, timeout=8.0)
         if isinstance(payload, dict):
-            return {key: int(value) for key, value in payload.items() if isinstance(value, (int, float))}
+            return {
+                key: int(value)
+                for key, value in payload.items()
+                if isinstance(value, (int, float))
+            }
     except Exception:
         pass
 
@@ -267,7 +314,9 @@ def set_selected_book_id(book_id: str | None) -> None:
 
 
 def get_selected_scope() -> tuple[str, str | None]:
-    block = str(st.session_state.get(GLOBAL_SELECTED_BLOCK_KEY, "A") or "A").strip().upper()
+    block = (
+        str(st.session_state.get(GLOBAL_SELECTED_BLOCK_KEY, "A") or "A").strip().upper()
+    )
     if block not in BLOCK_OPTIONS:
         block = "A"
 
@@ -317,7 +366,9 @@ def scope_params(block: str, module: str | None) -> dict[str, str]:
     return {"block": str(block).strip().upper(), "module": module_text.zfill(2)}
 
 
-def select_module_scope(*, key_prefix: str, title: str = "Módulo activo") -> tuple[str, str | None]:
+def select_module_scope(
+    *, key_prefix: str, title: str = "Módulo activo"
+) -> tuple[str, str | None]:
     current_block, current_module = get_selected_scope()
 
     st.caption(title)
@@ -334,7 +385,11 @@ def select_module_scope(*, key_prefix: str, title: str = "Módulo activo") -> tu
 
     with col_module:
         if available_modules:
-            default_module = current_module if current_module in available_modules else available_modules[0]
+            default_module = (
+                current_module
+                if current_module in available_modules
+                else available_modules[0]
+            )
             module = st.selectbox(
                 "Módulo",
                 available_modules,
@@ -367,7 +422,10 @@ def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
         book_id = str(row.get("id") or "").strip()
         if not book_id:
             continue
-        title = str((row.get("catalog") or {}).get("titulo") or "").strip() or "(sin titulo)"
+        title = (
+            str((row.get("catalog") or {}).get("titulo") or "").strip()
+            or "(sin titulo)"
+        )
         stage = str(row.get("pipeline_stage") or "unknown")
         review = " | review" if bool(row.get("workflow_needs_review")) else ""
         block = str(row.get("block") or "").strip()
@@ -377,7 +435,13 @@ def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
 
     preferred = get_selected_book_id()
     index = ids.index(preferred) if preferred in ids else 0
-    selected = st.selectbox(label, ids, index=index, key=key, format_func=lambda value: labels.get(value, value))
+    selected = st.selectbox(
+        label,
+        ids,
+        index=index,
+        key=key,
+        format_func=lambda value: labels.get(value, value),
+    )
     set_selected_book_id(selected)
     return selected
 
@@ -438,11 +502,19 @@ def render_ollama_model_selector(
     if options:
         matched_default = _match_default(default_text, options)
         display_options = list(options)
-        if default_text and matched_default is None and default_text not in display_options:
+        if (
+            default_text
+            and matched_default is None
+            and default_text not in display_options
+        ):
             # Keep .env value visible and selected even if not installed.
             display_options = [default_text, *display_options]
 
-        preferred = matched_default or default_text or (display_options[0] if display_options else "")
+        preferred = (
+            matched_default
+            or default_text
+            or (display_options[0] if display_options else "")
+        )
         if preferred and preferred not in display_options:
             preferred = display_options[0]
 
@@ -450,7 +522,9 @@ def render_ollama_model_selector(
         current_value = str(st.session_state.get(key) or "").strip()
         if current_value not in display_options:
             st.session_state[key] = preferred
-        selected = str(st.selectbox(label, display_options, key=key, disabled=disabled) or "").strip()
+        selected = str(
+            st.selectbox(label, display_options, key=key, disabled=disabled) or ""
+        ).strip()
         if default_text and selected == default_text and matched_default is None:
             st.caption(
                 f"Modelo desde `.env`: `{default_text}` (no detectado como instalado en backend). "
@@ -467,7 +541,9 @@ def render_ollama_model_selector(
         )
         st.caption("No hay modelos Ollama instalados detectables en el backend.")
 
-    suggestions = [str(item).strip() for item in (suggested_models or []) if str(item).strip()]
+    suggestions = [
+        str(item).strip() for item in (suggested_models or []) if str(item).strip()
+    ]
     if suggestions:
         ordered: list[str] = []
         for item in suggestions:

@@ -101,7 +101,11 @@ def export_preview(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    ids = [str(row.get("listingid") or "").strip() for row in rows if str(row.get("listingid") or "").strip()]
+    ids = [
+        str(row.get("listingid") or "").strip()
+        for row in rows
+        if str(row.get("listingid") or "").strip()
+    ]
     return {
         "ok": True,
         "columns": columns,

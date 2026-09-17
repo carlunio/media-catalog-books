@@ -22,9 +22,22 @@ from ..config import (
     SYNC_RETENTION_DAYS,
     SYNC_STATE_PATH,
 )
+from . import migrations
 
 SNAPSHOTS_SUBDIR = "snapshots"
-SCHEMA_VERSION = "1"
+LEGACY_SCHEMA_VERSIONS = frozenset({"1"})
+REQUIRED_BOOK_RELATIONS = frozenset(
+    {
+        ("main", "book_items"),
+        ("main", "book_image_files"),
+        ("main", "book_ocr_data"),
+        ("main", "book_bibliographic_sources"),
+        ("main", "books"),
+        ("main", "book_field_allowed_values"),
+        ("main", "libros_carga_abebooks"),
+        ("ref", "iso_639_3"),
+    }
+)
 
 
 class SnapshotError(RuntimeError):
@@ -119,23 +132,72 @@ def _update_sync_state(snapshot: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def _update_import_state(snapshot: dict[str, Any], backup_path: Path | None) -> dict[str, Any]:
+def _update_import_state(
+    snapshot: dict[str, Any],
+    backup_path: Path | None,
+    migration: dict[str, Any],
+) -> dict[str, Any]:
     state = _read_json(SYNC_STATE_PATH) or {}
     now = _iso_now()
     state.update(
         {
             "last_imported_snapshot_id": snapshot["snapshot_id"],
-            "last_imported_sha256": snapshot.get("sha256") or snapshot.get("actual_sha256"),
+            "last_imported_sha256": snapshot.get("sha256")
+            or snapshot.get("actual_sha256"),
             "last_imported_at": now,
             "last_sync_at": now,
             "last_import_backup_path": str(backup_path) if backup_path else None,
+            "last_imported_source_schema_version": migration.get(
+                "source_schema_version"
+            ),
+            "last_imported_schema_version": migration.get("schema_version"),
+            "last_imported_migrations": migration.get("applied_now") or [],
         }
     )
     _write_json_atomic(SYNC_STATE_PATH, state)
     return state
 
 
-def _manifest_to_snapshot(manifest_path: Path, *, verify_hash: bool = True) -> dict[str, Any]:
+def _schema_compatibility(schema_version: Any) -> dict[str, Any]:
+    source_version = str(schema_version or "").strip()
+    current_version = migrations.latest_schema_version()
+    known_versions = set(migrations.known_schema_versions())
+
+    if source_version == current_version:
+        return {
+            "compatible": True,
+            "compatibility": "current",
+            "migration_required": False,
+            "compatibility_error": None,
+            "current_schema_version": current_version,
+        }
+    if source_version in LEGACY_SCHEMA_VERSIONS or source_version in known_versions:
+        return {
+            "compatible": True,
+            "compatibility": "upgrade_required",
+            "migration_required": True,
+            "compatibility_error": None,
+            "current_schema_version": current_version,
+        }
+    if not source_version:
+        error = "El manifiesto no indica schema_version."
+    else:
+        error = (
+            f"El esquema `{source_version}` no es compatible con esta version "
+            f"de la app (`{current_version}`)."
+        )
+    return {
+        "compatible": False,
+        "compatibility": "incompatible",
+        "migration_required": False,
+        "compatibility_error": error,
+        "current_schema_version": current_version,
+    }
+
+
+def _manifest_to_snapshot(
+    manifest_path: Path, *, verify_hash: bool = True
+) -> dict[str, Any]:
     manifest = _read_json(manifest_path)
     if manifest is None:
         return {
@@ -152,14 +214,31 @@ def _manifest_to_snapshot(manifest_path: Path, *, verify_hash: bool = True) -> d
     snapshot["path"] = str(db_path)
     snapshot["valid"] = True
     snapshot["error"] = None
+    snapshot.update(_schema_compatibility(snapshot.get("schema_version")))
+    snapshot["importable"] = bool(snapshot["compatible"])
 
     if not db_filename:
         snapshot["valid"] = False
+        snapshot["importable"] = False
         snapshot["error"] = "El manifiesto no indica db_filename."
+        return snapshot
+    db_filename_path = Path(db_filename)
+    if db_filename_path.is_absolute() or db_filename_path.name != db_filename:
+        snapshot["valid"] = False
+        snapshot["importable"] = False
+        snapshot["error"] = "db_filename debe ser un nombre de fichero simple."
         return snapshot
     if not db_path.exists():
         snapshot["valid"] = False
+        snapshot["importable"] = False
         snapshot["error"] = "El fichero DuckDB del snapshot no existe."
+        return snapshot
+    if db_path.resolve().parent != manifest_path.parent.resolve():
+        snapshot["valid"] = False
+        snapshot["importable"] = False
+        snapshot["error"] = (
+            "El fichero DuckDB resuelve fuera de la carpeta de snapshots."
+        )
         return snapshot
 
     if verify_hash:
@@ -168,9 +247,11 @@ def _manifest_to_snapshot(manifest_path: Path, *, verify_hash: bool = True) -> d
         snapshot["actual_sha256"] = actual_sha
         if not expected_sha:
             snapshot["valid"] = False
+            snapshot["importable"] = False
             snapshot["error"] = "El manifiesto no indica sha256."
         elif expected_sha != actual_sha:
             snapshot["valid"] = False
+            snapshot["importable"] = False
             snapshot["error"] = "El hash sha256 no coincide."
 
     created_at = _parse_datetime(snapshot.get("created_at"))
@@ -194,7 +275,9 @@ def _is_own_snapshot(snapshot: dict[str, Any]) -> bool:
     )
 
 
-def list_snapshots(*, verify_hash: bool = True, include_invalid: bool = True) -> list[dict[str, Any]]:
+def list_snapshots(
+    *, verify_hash: bool = True, include_invalid: bool = True
+) -> list[dict[str, Any]]:
     snapshots_path = _snapshots_dir()
     if not snapshots_path.exists():
         return []
@@ -205,7 +288,9 @@ def list_snapshots(*, verify_hash: bool = True, include_invalid: bool = True) ->
     ]
     if not include_invalid:
         snapshots = [snapshot for snapshot in snapshots if snapshot.get("valid")]
-    snapshots.sort(key=lambda item: float(item.get("_created_at_sort") or 0), reverse=True)
+    snapshots.sort(
+        key=lambda item: float(item.get("_created_at_sort") or 0), reverse=True
+    )
     for snapshot in snapshots:
         snapshot.pop("_created_at_sort", None)
     return snapshots
@@ -217,7 +302,9 @@ def detect_external_snapshot(
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     snapshot_list = snapshots if snapshots is not None else list_snapshots()
-    valid_snapshots = [snapshot for snapshot in snapshot_list if snapshot.get("valid")]
+    valid_snapshots = [
+        snapshot for snapshot in snapshot_list if snapshot.get("importable")
+    ]
     sync_state = state if state is not None else (_read_json(SYNC_STATE_PATH) or {})
     known_ids = _known_snapshot_ids(sync_state)
 
@@ -236,7 +323,11 @@ def detect_external_snapshot(
             continue
 
         created_at = _snapshot_created_at(snapshot)
-        if latest_known_created_at and created_at and created_at <= latest_known_created_at:
+        if (
+            latest_known_created_at
+            and created_at
+            and created_at <= latest_known_created_at
+        ):
             continue
         if latest_known_created_at and created_at is None:
             continue
@@ -248,6 +339,14 @@ def detect_external_snapshot(
 def get_status() -> dict[str, Any]:
     snapshots = list_snapshots(verify_hash=True, include_invalid=True)
     valid_snapshots = [snapshot for snapshot in snapshots if snapshot.get("valid")]
+    importable_snapshots = [
+        snapshot for snapshot in snapshots if snapshot.get("importable")
+    ]
+    incompatible_snapshots = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.get("valid") and not snapshot.get("compatible")
+    ]
     sync_state = _read_json(SYNC_STATE_PATH) or {}
     latest_external_snapshot = detect_external_snapshot(snapshots, state=sync_state)
     return {
@@ -264,7 +363,10 @@ def get_status() -> dict[str, Any]:
         "device": SYNC_DEVICE,
         "retention_days": SYNC_RETENTION_DAYS,
         "keep_min": SYNC_KEEP_MIN,
+        "schema_version": migrations.latest_schema_version(),
         "snapshots_count": len(valid_snapshots),
+        "importable_snapshots_count": len(importable_snapshots),
+        "incompatible_snapshots_count": len(incompatible_snapshots),
         "latest_snapshot": valid_snapshots[0] if valid_snapshots else None,
         "latest_external_snapshot": latest_external_snapshot,
         "has_external_snapshot": latest_external_snapshot is not None,
@@ -278,9 +380,18 @@ def _new_snapshot_id() -> str:
     return f"{timestamp}_{actor}_{device}"
 
 
-def publish_snapshot(*, notes: str | None = None, cleanup: bool = True) -> dict[str, Any]:
+def publish_snapshot(
+    *, notes: str | None = None, cleanup: bool = True
+) -> dict[str, Any]:
     if not DB_PATH.exists():
         raise SnapshotError(f"No existe la base local: {DB_PATH}")
+
+    try:
+        migration_status = migrations.migrate()
+    except Exception as exc:
+        raise SnapshotError(
+            f"No se puede publicar una base con esquema no valido: {exc}"
+        ) from exc
 
     snapshots_path = _snapshots_dir()
     snapshots_path.mkdir(parents=True, exist_ok=True)
@@ -304,7 +415,7 @@ def publish_snapshot(*, notes: str | None = None, cleanup: bool = True) -> dict[
             "snapshot_id": snapshot_id,
             "created_at": _iso_now(),
             "app_version": app_meta.version,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": migration_status["schema_version"],
             "source_actor": SYNC_ACTOR,
             "source_device": SYNC_DEVICE,
             "source_db_path": str(DB_PATH),
@@ -323,6 +434,12 @@ def publish_snapshot(*, notes: str | None = None, cleanup: bool = True) -> dict[
             "snapshot": snapshot,
             "sync_state": state,
             "cleanup": cleanup_result,
+            "migration": {
+                "schema_version": migration_status["schema_version"],
+                "applied_now": migration_status.get("applied_now") or [],
+                "upgraded_checksums_now": migration_status.get("upgraded_checksums_now")
+                or [],
+            },
         }
     finally:
         if tmp_db_path.exists():
@@ -339,6 +456,12 @@ def _find_snapshot(snapshot_id: str) -> dict[str, Any]:
             continue
         if not snapshot.get("valid"):
             error = str(snapshot.get("error") or "Snapshot no valido.")
+            raise SnapshotError(f"No se puede importar `{clean_snapshot_id}`: {error}")
+        if not snapshot.get("compatible"):
+            error = str(
+                snapshot.get("compatibility_error")
+                or "La version de esquema no es compatible."
+            )
             raise SnapshotError(f"No se puede importar `{clean_snapshot_id}`: {error}")
         return snapshot
 
@@ -366,16 +489,84 @@ def _backup_local_database(snapshot_id: str) -> Path | None:
         with duckdb.connect(str(DB_PATH)) as con:
             con.execute("CHECKPOINT")
     except Exception as exc:
-        raise SnapshotError(f"No se pudo preparar la base local antes del backup: {exc}") from exc
+        raise SnapshotError(
+            f"No se pudo preparar la base local antes del backup: {exc}"
+        ) from exc
 
     backup_dir = DB_PATH.parent / "backups" / "local"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = _now().strftime("%Y%m%d_%H%M%S")
     backup_path = _unique_path(
-        backup_dir / f"books_before_import_{timestamp}_{_slug(snapshot_id, 'snapshot')}.duckdb"
+        backup_dir
+        / f"books_before_import_{timestamp}_{_slug(snapshot_id, 'snapshot')}.duckdb"
     )
     shutil.copy2(DB_PATH, backup_path)
     return backup_path
+
+
+def _validate_book_database(database_path: Path) -> dict[str, Any]:
+    try:
+        with duckdb.connect(str(database_path), read_only=True) as con:
+            rows = con.execute("""
+                SELECT table_schema, table_name
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                """).fetchall()
+    except Exception as exc:
+        raise SnapshotError(f"El fichero no es una base DuckDB legible: {exc}") from exc
+
+    relations = {(str(row[0]), str(row[1])) for row in rows}
+    missing = sorted(REQUIRED_BOOK_RELATIONS - relations)
+    if missing:
+        missing_text = ", ".join(f"{schema}.{name}" for schema, name in missing)
+        raise SnapshotError(
+            "La base del snapshot no pertenece a Media Catalog Books o tiene "
+            f"un esquema incompleto. Faltan: {missing_text}."
+        )
+    return {"checked_relations": len(REQUIRED_BOOK_RELATIONS)}
+
+
+def _prepare_import_candidate(
+    database_path: Path, snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    identity = _validate_book_database(database_path)
+    try:
+        status = migrations.migrate(database_path)
+    except Exception as exc:
+        raise SnapshotError(
+            f"No se pudo actualizar el esquema del snapshot: {exc}"
+        ) from exc
+    _validate_book_database(database_path)
+
+    if status.get("pending_count"):
+        raise SnapshotError(
+            "El snapshot conserva migraciones pendientes despues de prepararlo."
+        )
+    return {
+        "source_schema_version": str(snapshot.get("schema_version") or ""),
+        "schema_version": status["schema_version"],
+        "applied_now": status.get("applied_now") or [],
+        "upgraded_checksums_now": status.get("upgraded_checksums_now") or [],
+        **identity,
+    }
+
+
+def _restore_local_database(backup_path: Path | None) -> None:
+    if backup_path is None:
+        if DB_PATH.exists():
+            DB_PATH.unlink()
+        return
+
+    timestamp = _now().strftime("%Y%m%d_%H%M%S_%f")
+    restore_path = (
+        DB_PATH.parent / f".{DB_PATH.stem}.restoring_{timestamp}{DB_PATH.suffix}"
+    )
+    try:
+        shutil.copy2(backup_path, restore_path)
+        restore_path.replace(DB_PATH)
+    finally:
+        if restore_path.exists():
+            restore_path.unlink()
 
 
 def import_snapshot(*, snapshot_id: str, confirm: bool = False) -> dict[str, Any]:
@@ -389,27 +580,49 @@ def import_snapshot(*, snapshot_id: str, confirm: bool = False) -> dict[str, Any
     if expected_sha and actual_sha != expected_sha:
         raise SnapshotError("El hash sha256 del snapshot no coincide.")
 
-    backup_path = _backup_local_database(str(snapshot["snapshot_id"]))
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_local_path = DB_PATH.with_suffix(DB_PATH.suffix + ".importing")
-    if tmp_local_path.exists():
-        tmp_local_path.unlink()
+    timestamp = _now().strftime("%Y%m%d_%H%M%S_%f")
+    tmp_local_path = (
+        DB_PATH.parent / f".{DB_PATH.stem}.importing_{timestamp}{DB_PATH.suffix}"
+    )
+    backup_path: Path | None = None
 
     try:
         shutil.copy2(source_path, tmp_local_path)
         if expected_sha and _sha256_file(tmp_local_path) != expected_sha:
-            raise SnapshotError("La copia local del snapshot no conserva el sha256 esperado.")
+            raise SnapshotError(
+                "La copia local del snapshot no conserva el sha256 esperado."
+            )
+        migration = _prepare_import_candidate(tmp_local_path, snapshot)
+        backup_path = _backup_local_database(str(snapshot["snapshot_id"]))
         tmp_local_path.replace(DB_PATH)
+        try:
+            state = _update_import_state(snapshot, backup_path, migration)
+        except Exception as exc:
+            try:
+                _restore_local_database(backup_path)
+            except Exception as restore_exc:
+                backup_hint = str(backup_path) if backup_path else "no disponible"
+                raise SnapshotError(
+                    "La importacion fallo despues de sustituir la base y no se "
+                    "pudo restaurar automaticamente. Backup local: "
+                    f"{backup_hint}. Error de restauracion: {restore_exc}"
+                ) from restore_exc
+            raise SnapshotError(
+                "No se pudo registrar la importacion; la base local anterior "
+                f"se ha restaurado: {exc}"
+            ) from exc
     finally:
         if tmp_local_path.exists():
             tmp_local_path.unlink()
 
-    state = _update_import_state(snapshot, backup_path)
     return {
         "ok": True,
         "snapshot": snapshot,
         "backup_path": str(backup_path) if backup_path else None,
         "sync_state": state,
+        "migration": migration,
+        "restart_required": True,
     }
 
 

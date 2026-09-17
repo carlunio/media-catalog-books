@@ -2,7 +2,6 @@ import os
 import socket
 from pathlib import Path
 
-
 SNAPSHOTS_REPO_DIRNAME = "media-catalog-books"
 
 
@@ -95,7 +94,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ISBNDB_API_KEY = os.getenv("ISBNDB_API_KEY")
 
 OCR_PROVIDER = os.getenv("OCR_PROVIDER", "ollama").strip().lower() or "ollama"
-OCR_OPENAI_MODEL = os.getenv("OCR_OPENAI_MODEL", os.getenv("OCR_VISION_MODEL", "gpt-4o-mini"))
+OCR_OPENAI_MODEL = os.getenv(
+    "OCR_OPENAI_MODEL", os.getenv("OCR_VISION_MODEL", "gpt-4o-mini")
+)
 OCR_OLLAMA_MODEL = os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest")
 OCR_RESIZE_TO_1800_DEFAULT = _as_bool(os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), True)
 OCR_ISBN_OLLAMA_MODEL = os.getenv("OCR_ISBN_OLLAMA_MODEL", "gpt-oss:20b")
@@ -107,17 +108,25 @@ OCR_USE_SIDECAR = _as_bool(os.getenv("OCR_USE_SIDECAR"), False)
 CATALOG_MODEL = os.getenv("CATALOG_MODEL", "gpt-4o-mini")
 CATALOG_OPENAI_MODEL = os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL)
 CATALOG_OLLAMA_MODEL = os.getenv("CATALOG_OLLAMA_MODEL", "qwen2.5:14b")
-CATALOG_PROVIDER = os.getenv("CATALOG_PROVIDER", "openai").strip().lower() or "openai"
+CATALOG_PROVIDER = os.getenv("CATALOG_PROVIDER", "ollama").strip().lower() or "ollama"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _as_optional_float(os.getenv("OLLAMA_TIMEOUT_SECONDS"), None)
 CATALOG_ARBITER_ENABLED = _as_bool(os.getenv("CATALOG_ARBITER_ENABLED"), False)
-CATALOG_ARBITER_PROVIDER = os.getenv("CATALOG_ARBITER_PROVIDER", "auto").strip().lower() or "auto"
-CATALOG_ARBITER_MIN_CONFIDENCE = _as_float(os.getenv("CATALOG_ARBITER_MIN_CONFIDENCE", "0.72"), 0.72)
+CATALOG_ARBITER_PROVIDER = (
+    os.getenv("CATALOG_ARBITER_PROVIDER", "auto").strip().lower() or "auto"
+)
+CATALOG_ARBITER_MIN_CONFIDENCE = _as_float(
+    os.getenv("CATALOG_ARBITER_MIN_CONFIDENCE", "0.72"), 0.72
+)
 
 REQUEST_TIMEOUT_SECONDS = _as_float(os.getenv("REQUEST_TIMEOUT_SECONDS", "20"), 20.0)
 WORKFLOW_MAX_ATTEMPTS = _as_int(os.getenv("WORKFLOW_MAX_ATTEMPTS", "2"), 2)
-GOOGLE_BOOKS_MIN_INTERVAL_SECONDS = _as_float(os.getenv("GOOGLE_BOOKS_MIN_INTERVAL_SECONDS", "60"), 60.0)
-OPENLIBRARY_MIN_INTERVAL_SECONDS = _as_float(os.getenv("OPENLIBRARY_MIN_INTERVAL_SECONDS", "60"), 60.0)
+GOOGLE_BOOKS_MIN_INTERVAL_SECONDS = _as_float(
+    os.getenv("GOOGLE_BOOKS_MIN_INTERVAL_SECONDS", "60"), 60.0
+)
+OPENLIBRARY_MIN_INTERVAL_SECONDS = _as_float(
+    os.getenv("OPENLIBRARY_MIN_INTERVAL_SECONDS", "60"), 60.0
+)
 
 if __name__ == "__main__":
     print("PROJECT_ROOT:", PROJECT_ROOT)

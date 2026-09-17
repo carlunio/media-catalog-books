@@ -30,7 +30,9 @@ st.title("Fase 0 · Extracción")
 st.caption("Extrae e indexa imágenes de créditos en DuckDB")
 show_backend_status()
 
-scope_block, scope_module = select_module_scope(key_prefix="ingesta_scope", title="Módulo de trabajo")
+scope_block, scope_module = select_module_scope(
+    key_prefix="ingesta_scope", title="Módulo de trabajo"
+)
 if not scope_module:
     st.stop()
 
@@ -48,7 +50,9 @@ with st.form("ingest_form"):
     folder = st.text_input("Carpeta de imágenes", value=default_folder)
     recursive = st.checkbox("Recursivo dentro del módulo", value=True)
     overwrite_paths = st.checkbox("Sobrescribir rutas ya registradas", value=False)
-    ext_text = st.text_input("Extensiones (coma separadas)", value="jpg,jpeg,png,webp,heic")
+    ext_text = st.text_input(
+        "Extensiones (coma separadas)", value="jpg,jpeg,png,webp,heic"
+    )
 
     submitted = st.form_submit_button("Extraer módulo", type="primary")
 
@@ -73,7 +77,16 @@ st.subheader("Vista rápida de libros")
 
 stage_filter = st.selectbox(
     "Filtrar por etapa",
-    ["(todas)", "ocr", "metadata", "catalog", "cover", "review", "done", "needs_workflow_review"],
+    [
+        "(todas)",
+        "ocr",
+        "metadata",
+        "catalog",
+        "cover",
+        "review",
+        "done",
+        "needs_workflow_review",
+    ],
 )
 limit = st.number_input("Límite", min_value=1, max_value=5000, value=200)
 

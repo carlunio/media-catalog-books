@@ -12,6 +12,7 @@ from src.backend.services import migrations  # noqa: E402
 def main() -> None:
     status = migrations.migrate()
     print(f"Database ready: {DB_PATH}")
+    print(f"Schema version: {status['schema_version']}")
     print(f"Migrations applied now: {status.get('applied_now', [])}")
 
 

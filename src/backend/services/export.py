@@ -66,9 +66,7 @@ def _split_tokens(value: str | list[str] | tuple[str, ...] | None) -> list[str]:
         if not text:
             return []
         tokens = [
-            chunk.strip()
-            for chunk in re.split(r"[,\s;]+", text)
-            if chunk.strip()
+            chunk.strip() for chunk in re.split(r"[,\s;]+", text) if chunk.strip()
         ]
     return [token for token in tokens if token]
 
@@ -102,7 +100,9 @@ def _resolve_prefixes(
                     f"Invalid module token: {token}. Use 01..99 or explicit prefix 01A."
                 )
             if normalized_block is None:
-                raise ValueError("block is required when modules are provided as 01..99")
+                raise ValueError(
+                    "block is required when modules are provided as 01..99"
+                )
             prefix = f"{module}{normalized_block}"
 
         if prefix not in prefixes:
@@ -355,9 +355,7 @@ def mark_exported_books_uploaded(ids: list[str] | tuple[str, ...]) -> dict[str, 
             params,
         ).fetchall()
         matched_ids = [
-            str(row[0] or "").strip()
-            for row in rows
-            if str(row[0] or "").strip()
+            str(row[0] or "").strip() for row in rows if str(row[0] or "").strip()
         ]
         if matched_ids:
             matched_placeholders = ", ".join(["?"] * len(matched_ids))

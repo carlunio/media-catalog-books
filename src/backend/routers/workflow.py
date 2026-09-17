@@ -70,9 +70,13 @@ def workflow_snapshot(
     if limit < 1 or limit > 50000:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 50000")
     if review_limit < 1 or review_limit > 5000:
-        raise HTTPException(status_code=400, detail="review_limit must be between 1 and 5000")
+        raise HTTPException(
+            status_code=400, detail="review_limit must be between 1 and 5000"
+        )
     try:
-        return workflow.snapshot(limit=limit, review_limit=review_limit, block=block, module=module)
+        return workflow.snapshot(
+            limit=limit, review_limit=review_limit, block=block, module=module
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -166,8 +170,6 @@ def run_metadata(payload: RunMetadataRequest):
             stop_after="metadata",
             overwrite=payload.overwrite,
             max_attempts=WORKFLOW_MAX_ATTEMPTS,
-            catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
-            catalog_model=payload.catalog_model,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

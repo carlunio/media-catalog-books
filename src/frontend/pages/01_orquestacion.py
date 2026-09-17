@@ -54,7 +54,9 @@ st.title("Fase 1 · Orquestación LangGraph")
 st.caption(f"Backend objetivo: {API_URL}")
 show_backend_status()
 
-scope_block, scope_module = select_module_scope(key_prefix="orq_scope", title="Módulo de trabajo")
+scope_block, scope_module = select_module_scope(
+    key_prefix="orq_scope", title="Módulo de trabajo"
+)
 if not scope_module:
     st.stop()
 
@@ -65,10 +67,14 @@ with st.expander("Definición del grafo", expanded=False):
         col_a, col_b = st.columns(2)
         with col_a:
             st.write("Nodos")
-            st.dataframe(pd.DataFrame(graph.get("nodes", [])), width="stretch", hide_index=True)
+            st.dataframe(
+                pd.DataFrame(graph.get("nodes", [])), width="stretch", hide_index=True
+            )
         with col_b:
             st.write("Aristas")
-            st.dataframe(pd.DataFrame(graph.get("edges", [])), width="stretch", hide_index=True)
+            st.dataframe(
+                pd.DataFrame(graph.get("edges", [])), width="stretch", hide_index=True
+            )
     except Exception as exc:
         st.error(f"No se pudo cargar /workflow/graph: {exc}")
 
@@ -105,12 +111,18 @@ overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
 max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
 
 start_idx = STAGE_INDEX.get(start_stage, 0)
-stop_idx = len(WORKFLOW_STAGES) - 1 if stop_after == "(sin límite)" else STAGE_INDEX.get(stop_after, start_idx)
+stop_idx = (
+    len(WORKFLOW_STAGES) - 1
+    if stop_after == "(sin límite)"
+    else STAGE_INDEX.get(stop_after, start_idx)
+)
 if stop_idx < start_idx:
     stop_idx = start_idx
 
 ocr_in_flow = STAGE_INDEX["ocr"] >= start_idx and STAGE_INDEX["ocr"] <= stop_idx
-catalog_in_flow = STAGE_INDEX["catalog"] >= start_idx and STAGE_INDEX["catalog"] <= stop_idx
+catalog_in_flow = (
+    STAGE_INDEX["catalog"] >= start_idx and STAGE_INDEX["catalog"] <= stop_idx
+)
 
 eligible_limit: int | None = None
 if not overwrite:
@@ -135,10 +147,14 @@ else:
     if eligible_limit is None:
         limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
     elif eligible_limit <= 0:
-        st.info(f"No hay items elegibles en etapa '{start_stage}' para el módulo seleccionado.")
+        st.info(
+            f"No hay items elegibles en etapa '{start_stage}' para el módulo seleccionado."
+        )
         limit = 0
     else:
-        st.caption(f"Elegibles exactos para '{start_stage}' sin overwrite: {eligible_limit}")
+        st.caption(
+            f"Elegibles exactos para '{start_stage}' sin overwrite: {eligible_limit}"
+        )
         limit = st.number_input(
             "Lote",
             min_value=1,
@@ -200,8 +216,12 @@ with cat_col_a:
     catalog_provider_options = ["openai", "ollama"]
     catalog_provider_index = 0
     if CATALOG_PROVIDER_DEFAULT in catalog_provider_options:
-        catalog_provider_index = catalog_provider_options.index(CATALOG_PROVIDER_DEFAULT)
-    seed_widget_once("orq_catalog_provider", catalog_provider_options[catalog_provider_index])
+        catalog_provider_index = catalog_provider_options.index(
+            CATALOG_PROVIDER_DEFAULT
+        )
+    seed_widget_once(
+        "orq_catalog_provider", catalog_provider_options[catalog_provider_index]
+    )
     catalog_provider = st.selectbox(
         "Provider catalogo",
         catalog_provider_options,
@@ -232,11 +252,15 @@ if not catalog_in_flow:
 if ocr_in_flow:
     st.caption(f"OCR efectivo (si no tocas nada): `{ocr_provider}` / `{ocr_model}`")
 if catalog_in_flow:
-    st.caption(f"Catalog efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`")
+    st.caption(
+        f"Catalog efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`"
+    )
 
 if st.button("Ejecutar workflow", type="primary"):
     if not overwrite and int(limit) <= 0:
-        st.warning("No hay items elegibles para ejecutar con esa etapa inicial y overwrite desactivado.")
+        st.warning(
+            "No hay items elegibles para ejecutar con esa etapa inicial y overwrite desactivado."
+        )
         st.stop()
 
     payload = {
@@ -256,7 +280,9 @@ if st.button("Ejecutar workflow", type="primary"):
     }
     try:
         result = api_post("/workflow/run", json=payload, timeout=1800.0)
-        st.success(f"Procesados {result.get('processed', 0)} de {result.get('requested', 0)}")
+        st.success(
+            f"Procesados {result.get('processed', 0)} de {result.get('requested', 0)}"
+        )
         items = result.get("items", [])
         if items:
             st.dataframe(pd.DataFrame(items), width="stretch", hide_index=True)
@@ -269,7 +295,11 @@ if st.button("Refrescar snapshot"):
     st.cache_data.clear()
 
 try:
-    params = {"limit": 5000, "review_limit": 300, **scope_params(scope_block, scope_module)}
+    params = {
+        "limit": 5000,
+        "review_limit": 300,
+        **scope_params(scope_block, scope_module),
+    }
     snapshot = api_get("/workflow/snapshot", params=params, timeout=12.0)
 except Exception as exc:
     st.error(f"No se pudo cargar snapshot: {exc}")
@@ -277,6 +307,7 @@ except Exception as exc:
 
 stage_counts = snapshot.get("stage_counts", {})
 workflow_status_counts = snapshot.get("workflow_status_counts", {})
+form_status_counts = snapshot.get("form_status_counts", {})
 running_nodes = snapshot.get("running_nodes", {})
 
 m1, m2, m3, m4 = st.columns(4)
@@ -293,7 +324,11 @@ m8.metric("Unknown", int(stage_counts.get("unknown", 0)))
 
 with st.expander("Detalle de estados", expanded=False):
     st.write("Workflow status counts")
-    st.dataframe(pd.DataFrame([workflow_status_counts]), width="stretch", hide_index=True)
+    st.dataframe(
+        pd.DataFrame([workflow_status_counts]), width="stretch", hide_index=True
+    )
+    st.write("Form status counts")
+    st.dataframe(pd.DataFrame([form_status_counts]), width="stretch", hide_index=True)
     st.write("Running nodes")
     st.dataframe(pd.DataFrame([running_nodes]), width="stretch", hide_index=True)
 
@@ -337,7 +372,8 @@ if running_total > 0:
                         "id": str(row.get("id") or ""),
                         "nodo": node or "(sin nodo)",
                         "etapa": stage or "(sin etapa)",
-                        "accion": workflow_action or (f"Ejecutando {node}" if node else "Ejecutando workflow"),
+                        "accion": workflow_action
+                        or (f"Ejecutando {node}" if node else "Ejecutando workflow"),
                         "llm": llm_value or "-",
                         "attempt": int(row.get("workflow_attempt") or 0),
                         "updated_at": row.get("updated_at"),
@@ -384,7 +420,11 @@ if review_queue:
                 payload["ocr_resize_to_1800"] = bool(ocr_resize_to_1800)
                 payload["catalog_provider"] = catalog_provider
                 payload["catalog_model"] = catalog_model.strip() or None
-                result = api_post(f"/workflow/review/{selected_review_id}", json=payload, timeout=600.0)
+                result = api_post(
+                    f"/workflow/review/{selected_review_id}",
+                    json=payload,
+                    timeout=600.0,
+                )
                 st.success("Accion aplicada")
                 st.json(result)
             except Exception as exc:
@@ -397,7 +437,9 @@ if review_queue:
                     "reason": "Marcado manual desde pagina de orquestación",
                     "node": "manual",
                 }
-                result = api_post(f"/workflow/review/{selected_review_id}/mark", json=payload)
+                result = api_post(
+                    f"/workflow/review/{selected_review_id}/mark", json=payload
+                )
                 st.success("Libro marcado en review")
                 st.json(result)
             except Exception as exc:

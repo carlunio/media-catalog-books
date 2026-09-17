@@ -3,7 +3,11 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from ..normalizers import clean_isbn, is_valid_isbn
-from ..schemas.review import UpdateCatalogRequest, UpdateMetadataRequest, UpdateOcrRequest
+from ..schemas.review import (
+    UpdateCatalogRequest,
+    UpdateMetadataRequest,
+    UpdateOcrRequest,
+)
 from ..services import books, ocr
 
 router = APIRouter()
@@ -53,7 +57,12 @@ def _update_ocr_with_retry(
 
 
 @router.get("/books")
-def list_books(stage: str | None = None, limit: int = 500, block: str | None = None, module: str | None = None):
+def list_books(
+    stage: str | None = None,
+    limit: int = 500,
+    block: str | None = None,
+    module: str | None = None,
+):
     try:
         return books.list_books(stage=stage, limit=limit, block=block, module=module)
     except ValueError as exc:
@@ -102,8 +111,14 @@ def update_book_ocr(book_id: str, payload: UpdateOcrRequest):
         final_isbn = str(derived.get("isbn"))
         isbn_source = str(derived.get("source") or "derived_from_text")
 
-    derived_candidates = derived.get("raw_candidates") if isinstance(derived.get("raw_candidates"), list) else []
-    compact_candidates = [str(item) for item in derived_candidates[:5] if str(item).strip()]
+    derived_candidates = (
+        derived.get("raw_candidates")
+        if isinstance(derived.get("raw_candidates"), list)
+        else []
+    )
+    compact_candidates = [
+        str(item) for item in derived_candidates[:5] if str(item).strip()
+    ]
 
     trace = {
         "source": "manual_update",
@@ -169,7 +184,9 @@ def update_book_metadata(book_id: str, payload: UpdateMetadataRequest):
     if books.get_book(book_id) is None:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    books.update_metadata(book_id, metadata=payload.metadata, status="manual", error=None)
+    books.update_metadata(
+        book_id, metadata=payload.metadata, status="manual", error=None
+    )
     return {"ok": True}
 
 

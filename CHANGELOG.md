@@ -1,18 +1,54 @@
 ## [Unreleased]
 
 ### Added
+- Controlador multiplataforma `scripts/appctl.py` para preparar, arrancar, actualizar, detener y diagnosticar la instalación sin depender de GNU Make.
+- Lanzador de diagnóstico para Windows y Linux.
+- Actualización automática del canal estable al abrir la aplicación, con backup previo de DuckDB, comprobación de salud y rollback de código y datos.
+- Política de publicación `develop -> main -> tag` documentada en `docs/RELEASING.md`.
 - Metadatos de proyecto centralizados en `src/project_meta.py` y versión visible en API/UI.
 - Routers FastAPI separados por dominio para core, ingesta, workflow, libros, ficha core, exportación y snapshots.
 - Migraciones idempotentes con tabla `schema_migrations` y script `scripts/migrate_db.py`.
+- Fixture DuckDB sintética generada con `v0.1.1` para verificar actualizaciones desde una release publicada.
+- Validación de identidad y compatibilidad de snapshots antes de importar, con migración aislada de la copia y rollback completo.
+- Guía técnica de snapshots en `docs/SNAPSHOTS.md`.
 - Snapshots DuckDB con manifiesto, verificación `sha256`, backup local antes de importar y página Streamlit `05_datos`.
 - Targets Make para migraciones, snapshots, actualización, lint, formato y tests.
 - CI con lint/test y lanzadores `tools/` para Windows/Linux.
 - Tests de import de API, esquema, migraciones, exportación y snapshots.
+- Lock reproducible con hashes, build PEP 517 y guía de mantenimiento de dependencias.
+- Creación automática y no destructiva de `.env`, validación de configuración y smoke test aislado.
+- Ciclo operativo de ficha `not_started -> draft -> consolidated`, con creación
+  manual para cualquier libro ingerido y reapertura explícita.
+- Aceptación persistente de libros sin ISBN para que puedan continuar hacia
+  metadata, catalogación y formulario sin volver a revisión.
 
 ### Changed
+- Los lanzadores de `tools/` delegan en `appctl`; GNU Make queda como herramienta opcional para desarrollo.
+- `launch` funciona como arranque estable sin recarga; `dev` mantiene la recarga y nunca actualiza Git.
+- Las actualizaciones sólo aceptan fast-forward desde una instalación limpia situada en la rama estable.
 - `scripts/init_db.py` pasa a aplicar migraciones en lugar de inicializar el esquema directamente.
+- El baseline monolítico pasa a un historial incremental inmutable; cada checksum cubre la implementación completa y cada paso se aplica en una transacción.
+- La creación del esquema sale del servicio de libros y queda aislada en módulos de migración versionados.
+- Los manifiestos de snapshots usan la versión real del registro de migraciones y distinguen integridad, compatibilidad e importabilidad.
+- La pantalla de Datos muestra el esquema de cada snapshot y las migraciones aplicadas durante la importación.
 - `src/backend/main.py` queda como composición de app y routers.
 - README actualizado con operación, snapshots, tooling y roadmap técnico.
+- Instalación reproducible desde `requirements.lock`, con reconstrucción automática del entorno cuando cambia.
+- CI ampliada a Ubuntu y Windows para validar dependencias, tests y empaquetado.
+- CI y `make lint` comprueban tanto Ruff como el formato de Black.
+- `doctor` revisa remoto Git, lock, recursos, permisos, DuckDB, puertos y proveedores sin modificar datos.
+- Las fichas consolidadas quedan fuera de las colas del workflow y protegidas
+  frente a edición, resincronización y ejecuciones automáticas hasta su reapertura.
+- El formulario deja de sincronizar implícitamente la ficha al abrir o guardar;
+  la sincronización desde la catalogación automática es una acción expresa.
+
+### Fixed
+- La versión expuesta por `pyproject.toml`, FastAPI y Streamlit vuelve a coincidir con la última release documentada (`0.1.1`).
+- Los recursos locales dejan de proponerse para versionado: `make setup` descarga la tabla ISO 639-3 oficial y admite preparar el icono opcional mediante `APP_ICON_URL`.
+- La distribución de idiomas pasa a ser `python-iso639` y `langcodes[data]`, que corresponden a las API realmente usadas.
+- El proveedor predeterminado de catálogo queda alineado con `.env.example` y la interfaz: Ollama.
+- La ejecución manual de metadata deja de enviar parámetros que no pertenecían
+  a su contrato y que provocaban un error del endpoint.
 
 ### Preserved
 - Sin cambios intencionados en campos de negocio de `books` ni en columnas de `libros_carga_abebooks`.

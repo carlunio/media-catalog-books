@@ -1,11 +1,10 @@
 import json
 import re
 from decimal import Decimal
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from ..config import DEFAULT_COVERS_DIR, PROJECT_ROOT
+from ..config import DEFAULT_COVERS_DIR
 from ..database import get_connection
 from ..normalizers import extract_book_id_from_path, normalize_book_id, split_book_id
 
@@ -18,81 +17,9 @@ METADATA_PROVIDER_MAP = (
     ("isbndb", "isbndb"),
     ("open_library", "openlibrary"),
 )
-METADATA_PROVIDER_REVERSE_MAP = {provider: source for source, provider in METADATA_PROVIDER_MAP}
-BOOK_ALLOWED_VALUES: list[tuple[str, str]] = [
-    ("edicion", "1ª edición"),
-    ("edicion", "2ª edición"),
-    ("edicion", "3ª edición"),
-    ("edicion", "4ª edición"),
-    ("edicion", "5ª edición o posteriores"),
-    ("edicion", "Edición especial"),
-    ("edicion", "Edición limitada"),
-    ("edicion", "Edición ilustrada"),
-    ("edicion", "Edición internacional"),
-    ("edicion", "Edición para el profesor"),
-    ("numero_impresion", "1ª impresión"),
-    ("numero_impresion", "2ª impresión"),
-    ("numero_impresion", "3ª impresión"),
-    ("numero_impresion", "4ª impresión"),
-    ("numero_impresion", "5ª impresión o posteriores"),
-    ("estado_stock", "En venta"),
-    ("estado_stock", "Vendido"),
-    ("estado_stock", "Extraviado"),
-    ("estado_carga", "Subido"),
-    ("estado_carga", "Para subir"),
-    ("estado_carga", "Para actualizar"),
-    ("estado_carga", "Más tarde"),
-    ("tipo_articulo", "Libros"),
-    ("tipo_articulo", "Mapas"),
-    ("tipo_articulo", "Manuscritos y coleccionismo de papel"),
-    ("tipo_articulo", "Comics"),
-    ("tipo_articulo", "Revistas y publicaciones"),
-    ("tipo_articulo", "Arte, grabados y pósters"),
-    ("tipo_articulo", "Partituras"),
-    ("tipo_articulo", "Fotografías"),
-    ("estado_conservacion", "Nuevo"),
-    ("estado_conservacion", "Como nuevo"),
-    ("estado_conservacion", "Excelente"),
-    ("estado_conservacion", "Muy bien"),
-    ("estado_conservacion", "Bien"),
-    ("estado_conservacion", "Aceptable"),
-    ("estado_conservacion", "Regular"),
-    ("estado_conservacion", "Pobre"),
-    ("estado_cubierta", "Nuevo"),
-    ("estado_cubierta", "Como nuevo"),
-    ("estado_cubierta", "Excelente"),
-    ("estado_cubierta", "Muy bien"),
-    ("estado_cubierta", "Bien"),
-    ("estado_cubierta", "Regular"),
-    ("estado_cubierta", "Mal"),
-    ("estado_cubierta", "Sin cubierta"),
-    ("dedicatorias", "Firmado por el autor o artista"),
-    ("dedicatorias", "Firmado por los autores o artistas"),
-    ("dedicatorias", "Firmado e inscrito por el autor o artista"),
-    ("dedicatorias", "Inscrito por el autor o artista"),
-    ("dedicatorias", "Firmado por el ilustrador"),
-    ("dedicatorias", "Inscrito por el ilustrador"),
-    ("plantilla_envio", "A"),
-    ("plantilla_envio", "B"),
-    ("catalogo", "ejemplo 1"),
-    ("catalogo", "ejemplo 2"),
-    ("categoria", "Ensayo"),
-    ("categoria", "Novela"),
-    ("categoria", "Poesía"),
-    ("categoria", "Cuentos"),
-    ("genero", "Ciencia ficción"),
-    ("genero", "Fantasía"),
-    ("genero", "Filosofía"),
-    ("genero", "Geología"),
-    ("encuadernacion", "Tapa dura"),
-    ("encuadernacion", "Tapa blanda"),
-    ("encuadernacion", "Sin encuadernación"),
-    ("ilustraciones", "Contiene ilustraciones"),
-    ("ilustraciones", "Ilustraciones en blanco y negro"),
-    ("ilustraciones", "Profusamente ilustrado"),
-    ("ilustraciones", "Profusamente ilustrado, en blanco y negro"),
-    ("estado_stock", "Descatalogado"),
-]
+METADATA_PROVIDER_REVERSE_MAP = {
+    provider: source for source, provider in METADATA_PROVIDER_MAP
+}
 CORE_BOOKS_COLUMNS: tuple[str, ...] = (
     "id",
     "estado_stock",
@@ -146,10 +73,23 @@ CORE_BOOKS_COLUMNS: tuple[str, ...] = (
     "cantidad",
     "descripcion",
 )
-CORE_BOOKS_EDITABLE_COLUMNS: tuple[str, ...] = tuple(column for column in CORE_BOOKS_COLUMNS if column != "id")
-CORE_BOOKS_INT_FIELDS = {"numero_coleccion", "alto", "ancho", "fondo", "peso", "paginas", "cantidad"}
+CORE_BOOKS_EDITABLE_COLUMNS: tuple[str, ...] = tuple(
+    column for column in CORE_BOOKS_COLUMNS if column != "id"
+)
+CORE_BOOKS_INT_FIELDS = {
+    "numero_coleccion",
+    "alto",
+    "ancho",
+    "fondo",
+    "peso",
+    "paginas",
+    "cantidad",
+}
 CORE_BOOKS_DECIMAL_FIELDS = {"precio"}
-ISO_639_3_TAB_PATH = PROJECT_ROOT / "assets" / "iso-639-3.tab"
+
+
+class CoreBookLockedError(ValueError):
+    pass
 
 
 def normalize_block(value: str | None) -> str | None:
@@ -157,7 +97,9 @@ def normalize_block(value: str | None) -> str | None:
     if not text:
         return None
     if text not in VALID_BLOCKS:
-        raise ValueError(f"Invalid block: {value}. Expected one of {', '.join(VALID_BLOCKS)}")
+        raise ValueError(
+            f"Invalid block: {value}. Expected one of {', '.join(VALID_BLOCKS)}"
+        )
     return text
 
 
@@ -166,7 +108,9 @@ def normalize_module(value: str | None) -> str | None:
     if not text:
         return None
     if not text.isdigit():
-        raise ValueError(f"Invalid module: {value}. Expected numeric value between 01 and 99")
+        raise ValueError(
+            f"Invalid module: {value}. Expected numeric value between 01 and 99"
+        )
     number = int(text)
     if number < 1 or number > 99:
         raise ValueError(f"Invalid module: {value}. Expected value between 01 and 99")
@@ -236,7 +180,9 @@ def _bulk_insert_book_items(
     if not rows:
         return
 
-    values_template = "(?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    values_template = (
+        "(?, ?, ?, ?, 'ocr', 'pending', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    )
     for chunk in _chunked(rows, size=chunk_size):
         flat_params: list[Any] = []
         for row in chunk:
@@ -332,407 +278,10 @@ def _iter_modules_from_structure(base: Path) -> list[tuple[str, str, Path]]:
     return modules
 
 
-@lru_cache(maxsize=1)
-def _load_langcodes_module() -> Any | None:
-    try:
-        import langcodes  # type: ignore
-    except Exception:
-        return None
-    return langcodes
-
-
-def _iso639_3_to_spanish_name(code: str | None) -> str | None:
-    text = str(code or "").strip().lower()
-    if len(text) != 3:
-        return None
-    if text == "mul":
-        return "múltiples idiomas"
-
-    langcodes = _load_langcodes_module()
-    if langcodes is None:
-        return None
-
-    try:
-        name = str(langcodes.Language.get(text).display_name("es") or "").strip()
-    except Exception:
-        return None
-
-    if not name:
-        return None
-    if name.lower() in {"unknown language", "idioma desconocido"}:
-        return None
-    return name.lower()
-
-
-def _ensure_iso_639_3_table(con: Any) -> None:
-    con.execute("CREATE SCHEMA IF NOT EXISTS ref")
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS ref.iso_639_3 (
-            id VARCHAR PRIMARY KEY,
-            part2b VARCHAR,
-            part2t VARCHAR,
-            part1 VARCHAR,
-            scope VARCHAR,
-            language_type VARCHAR,
-            ref_name VARCHAR,
-            comment VARCHAR,
-            spa_name VARCHAR
-        )
-        """
-    )
-    con.execute("ALTER TABLE ref.iso_639_3 ADD COLUMN IF NOT EXISTS spa_name VARCHAR")
-    con.execute("ALTER TABLE ref.iso_639_3 ADD COLUMN IF NOT EXISTS language_type VARCHAR")
-
-    legacy_nombre_spa_exists = bool(
-        con.execute(
-            """
-            SELECT COUNT(*) > 0
-            FROM information_schema.columns
-            WHERE table_schema = 'ref'
-              AND table_name = 'iso_639_3'
-              AND lower(column_name) = 'nombre_spa'
-            """
-        ).fetchone()[0]
-    )
-    if legacy_nombre_spa_exists:
-        con.execute(
-            """
-            UPDATE ref.iso_639_3
-            SET spa_name = nombre_spa
-            WHERE (spa_name IS NULL OR trim(spa_name) = '')
-              AND nombre_spa IS NOT NULL
-              AND trim(nombre_spa) <> ''
-            """
-        )
-
-    # Reload from SIL table if available, preserving manual spa_name values by id.
-    if ISO_639_3_TAB_PATH.exists():
-        con.execute(
-            """
-            CREATE OR REPLACE TEMP TABLE _iso_prev AS
-            SELECT id, spa_name
-            FROM ref.iso_639_3
-            """
-        )
-        con.execute("DELETE FROM ref.iso_639_3")
-        con.execute(
-            """
-            INSERT INTO ref.iso_639_3 (
-                id, part2b, part2t, part1, scope, language_type, ref_name, comment, spa_name
-            )
-            SELECT
-                src.id,
-                src.part2b,
-                src.part2t,
-                src.part1,
-                src.scope,
-                src.language_type,
-                src.ref_name,
-                src.comment,
-                prev.spa_name
-            FROM (
-                SELECT
-                    Id AS id,
-                    Part2b AS part2b,
-                    Part2t AS part2t,
-                    Part1 AS part1,
-                    Scope AS scope,
-                    Language_Type AS language_type,
-                    Ref_Name AS ref_name,
-                    Comment AS comment
-                FROM read_csv_auto(?, delim='\t', header=true, all_varchar=true)
-            ) AS src
-            LEFT JOIN _iso_prev AS prev ON prev.id = src.id
-            """,
-            [str(ISO_639_3_TAB_PATH)],
-        )
-
-    rows = con.execute("SELECT id, spa_name FROM ref.iso_639_3").fetchall()
-    updates: list[tuple[str, str]] = []
-    for row in rows:
-        iso_id = str(row[0] or "").strip().lower()
-        spa_name = str(row[1] or "").strip()
-        if not iso_id or spa_name:
-            continue
-        inferred = _iso639_3_to_spanish_name(iso_id)
-        if inferred:
-            updates.append((inferred, iso_id))
-
-    if updates:
-        con.executemany(
-            "UPDATE ref.iso_639_3 SET spa_name = ? WHERE id = ?",
-            updates,
-        )
-
-    con.execute("CREATE INDEX IF NOT EXISTS idx_ref_iso_639_3_spa_name ON ref.iso_639_3(spa_name)")
-
-
-def _create_books_core_schema(con: Any) -> None:
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS books (
-            id VARCHAR PRIMARY KEY,
-            estado_stock VARCHAR,
-            estado_carga VARCHAR,
-            titulo VARCHAR,
-            titulo_corto VARCHAR,
-            subtitulo VARCHAR,
-            titulo_completo VARCHAR,
-            autor VARCHAR,
-            pais_autor VARCHAR,
-            editorial VARCHAR,
-            pais_publicacion VARCHAR,
-            anio VARCHAR,
-            isbn VARCHAR,
-            idioma VARCHAR,
-            edicion VARCHAR,
-            numero_impresion VARCHAR,
-            coleccion VARCHAR,
-            numero_coleccion INTEGER,
-            obra_completa VARCHAR,
-            volumen VARCHAR,
-            traductor VARCHAR,
-            ilustrador VARCHAR,
-            editor VARCHAR,
-            fotografia_de VARCHAR,
-            introduccion_de VARCHAR,
-            epilogo_de VARCHAR,
-            categoria VARCHAR,
-            genero VARCHAR,
-            tipo_articulo VARCHAR,
-            ilustraciones VARCHAR,
-            encuadernacion VARCHAR,
-            detalle_encuadernacion VARCHAR,
-            estado_conservacion VARCHAR,
-            estado_cubierta VARCHAR,
-            desperfectos VARCHAR,
-            dedicatorias VARCHAR,
-            alto SMALLINT DEFAULT 0,
-            ancho INTEGER DEFAULT 0,
-            fondo INTEGER DEFAULT 0,
-            peso INTEGER DEFAULT 0,
-            unidad_peso VARCHAR DEFAULT 'GRAMS',
-            paginas INTEGER DEFAULT 0,
-            plantilla_envio VARCHAR,
-            palabras_clave VARCHAR,
-            catalogo_1 VARCHAR,
-            catalogo_2 VARCHAR,
-            catalogo_3 VARCHAR,
-            url_imagenes VARCHAR,
-            precio DECIMAL(18, 2) DEFAULT 1.00,
-            cantidad INTEGER DEFAULT 1,
-            descripcion VARCHAR
-        )
-        """
-    )
-
-    con.execute("CREATE INDEX IF NOT EXISTS idx_books_idioma ON books(idioma)")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_books_palabras_clave ON books(palabras_clave)")
-
-    # Keep schema aligned with current model (dimensiones removed in favor of alto/ancho/fondo).
-    try:
-        con.execute("ALTER TABLE books DROP COLUMN IF EXISTS dimensiones")
-    except Exception:
-        pass
-
-    _ensure_iso_639_3_table(con)
-
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS book_field_allowed_values (
-            table_name VARCHAR,
-            field_name VARCHAR,
-            field_value VARCHAR,
-            sort_order INTEGER DEFAULT 0,
-            PRIMARY KEY (table_name, field_name, field_value)
-        )
-        """
-    )
-    con.execute("ALTER TABLE book_field_allowed_values ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0")
-    target_rows = [("books", field_name, field_value, index) for index, (field_name, field_value) in enumerate(BOOK_ALLOWED_VALUES)]
-    target_keys = {(row[1], row[2]) for row in target_rows}
-
-    current_rows = con.execute(
-        """
-        SELECT field_name, field_value, sort_order
-        FROM book_field_allowed_values
-        WHERE table_name = 'books'
-        """
-    ).fetchall()
-    current_map = {
-        (str(row[0] or "").strip(), str(row[1] or "").strip()): int(row[2] or 0)
-        for row in current_rows
-        if str(row[0] or "").strip() and str(row[1] or "").strip()
-    }
-
-    insert_rows = [row for row in target_rows if (row[1], row[2]) not in current_map]
-    if insert_rows:
-        con.executemany(
-            "INSERT INTO book_field_allowed_values (table_name, field_name, field_value, sort_order) VALUES (?, ?, ?, ?)",
-            insert_rows,
-        )
-
-    update_rows = [
-        (row[3], row[0], row[1], row[2])
-        for row in target_rows
-        if current_map.get((row[1], row[2])) is not None and current_map.get((row[1], row[2])) != row[3]
-    ]
-    if update_rows:
-        con.executemany(
-            """
-            UPDATE book_field_allowed_values
-            SET sort_order = ?
-            WHERE table_name = ? AND field_name = ? AND field_value = ?
-            """,
-            update_rows,
-        )
-
-    delete_rows = [("books", field_name, field_value) for (field_name, field_value) in current_map.keys() if (field_name, field_value) not in target_keys]
-    if delete_rows:
-        con.executemany(
-            "DELETE FROM book_field_allowed_values WHERE table_name = ? AND field_name = ? AND field_value = ?",
-            delete_rows,
-        )
-
-    con.execute(
-        """
-        CREATE OR REPLACE VIEW libros_carga_abebooks AS
-        SELECT
-            b.id AS listingid,
-            b.titulo AS title,
-            b.autor AS author,
-            b.editorial AS publishername,
-            b.isbn AS isbn,
-            CASE
-                WHEN strpos(COALESCE(b.idioma, ''), ';') > 0 THEN 'MUL'
-                ELSE (
-                    SELECT upper(i.id)
-                    FROM ref.iso_639_3 AS i
-                    WHERE lower(trim(i.spa_name)) = lower(trim(b.idioma))
-                    LIMIT 1
-                )
-            END AS language,
-            b.tipo_articulo AS producttype,
-            b.encuadernacion AS bindingtext,
-            b.estado_conservacion AS bookcondition,
-            b.palabras_clave AS keywords,
-            b.url_imagenes AS imgurl,
-            CASE
-                WHEN b.precio IS NULL THEN NULL
-                ELSE CAST(CAST(b.precio AS DECIMAL(18, 2)) AS VARCHAR) || ' €'
-            END AS price,
-            b.cantidad AS quantity,
-            b.descripcion AS description
-        FROM books b
-        WHERE b.estado_carga IN ('Para subir', 'Para actualizar')
-        """
-    )
-
-
-def ensure_schema(con: Any) -> None:
-    # Operational state lives in book_items; core output schema is created in books.
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS book_items (
-            id VARCHAR PRIMARY KEY,
-            block VARCHAR,
-            module VARCHAR,
-            seq VARCHAR,
-
-            ocr_status VARCHAR,
-            ocr_error VARCHAR,
-            ocr_provider VARCHAR,
-            ocr_model VARCHAR,
-            ocr_trace_json VARCHAR,
-
-            metadata_status VARCHAR,
-            metadata_error VARCHAR,
-
-            catalog_json VARCHAR,
-            catalog_status VARCHAR,
-            catalog_error VARCHAR,
-
-            cover_path VARCHAR,
-            cover_status VARCHAR,
-            cover_error VARCHAR,
-
-            workflow_status VARCHAR DEFAULT 'pending',
-            workflow_current_node VARCHAR,
-            workflow_action VARCHAR,
-            workflow_attempt INTEGER DEFAULT 0,
-            workflow_needs_review BOOLEAN DEFAULT FALSE,
-            workflow_review_reason VARCHAR,
-
-            pipeline_stage VARCHAR DEFAULT 'ocr',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-
-    # Keep schema coherent if legacy columns exist in an already-created DB.
-    for legacy_column in ("image_path", "image_count", "credits_text", "isbn_raw", "isbn", "metadata_json"):
-        try:
-            con.execute(f"ALTER TABLE book_items DROP COLUMN IF EXISTS {legacy_column}")
-        except Exception:
-            pass
-
-    try:
-        con.execute("ALTER TABLE book_items ADD COLUMN IF NOT EXISTS workflow_action VARCHAR")
-    except Exception:
-        pass
-
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS book_image_files (
-            book_id VARCHAR,
-            n_imagen INTEGER,
-            filename VARCHAR,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY(book_id, n_imagen)
-        )
-        """
-    )
-
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS book_ocr_data (
-            book_id VARCHAR PRIMARY KEY,
-            extracted_text VARCHAR,
-            isbn_raw VARCHAR,
-            isbn VARCHAR,
-            isbn_list VARCHAR,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-
-    con.execute(
-        """
-        CREATE TABLE IF NOT EXISTS book_bibliographic_sources (
-            book_id VARCHAR,
-            provider VARCHAR,
-            isbn VARCHAR,
-            payload_json VARCHAR,
-            provider_status VARCHAR,
-            provider_error VARCHAR,
-            fetched_at VARCHAR,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY(book_id, provider)
-        )
-        """
-    )
-
-    _create_books_core_schema(con)
-
-
 def init_table() -> None:
-    with get_connection() as con:
-        ensure_schema(con)
+    from . import migrations
+
+    migrations.migrate()
 
 
 def _payload_column(payload_type: str) -> str:
@@ -755,7 +304,9 @@ def _image_filename(raw_path: str) -> str:
     return Path(str(raw_path or "").strip()).name
 
 
-def _resolve_image_file_path(*, block: str | None, module: str | None, filename: str | None) -> str | None:
+def _resolve_image_file_path(
+    *, block: str | None, module: str | None, filename: str | None
+) -> str | None:
     block_value = str(block or "").strip().upper()
     try:
         module_value = normalize_module(module)
@@ -764,7 +315,9 @@ def _resolve_image_file_path(*, block: str | None, module: str | None, filename:
     filename_value = str(filename or "").strip()
     if not block_value or not module_value or not filename_value:
         return None
-    return str((DEFAULT_COVERS_DIR / block_value / module_value / filename_value).resolve())
+    return str(
+        (DEFAULT_COVERS_DIR / block_value / module_value / filename_value).resolve()
+    )
 
 
 def _upsert_ocr_data(
@@ -782,7 +335,9 @@ def _upsert_ocr_data(
         if isinstance(extraction, dict):
             raw_candidates = extraction.get("candidates")
             if isinstance(raw_candidates, list):
-                candidates = [str(item).strip() for item in raw_candidates if str(item).strip()]
+                candidates = [
+                    str(item).strip() for item in raw_candidates if str(item).strip()
+                ]
 
     if not candidates:
         if isbn:
@@ -821,7 +376,9 @@ def _upsert_ocr_data(
             con.close()
 
 
-def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any], con: Any | None = None) -> None:
+def _upsert_bibliographic_sources(
+    *, book_id: str, metadata: dict[str, Any], con: Any | None = None
+) -> None:
     isbn = str(metadata.get("isbn") or "").strip() or None
     fetched_at = str(metadata.get("fetched_at") or "").strip() or None
     errors = metadata.get("errors") if isinstance(metadata.get("errors"), dict) else {}
@@ -833,11 +390,24 @@ def _upsert_bibliographic_sources(*, book_id: str, metadata: dict[str, Any], con
     assert con is not None
     try:
         for source_key, provider in METADATA_PROVIDER_MAP:
-            payload = metadata.get(source_key) if isinstance(metadata.get(source_key), dict) else {}
-            provider_error = str(errors.get(source_key) or "").strip() if isinstance(errors, dict) else ""
-            provider_status = "fetched" if payload else ("error" if provider_error else "empty")
+            payload = (
+                metadata.get(source_key)
+                if isinstance(metadata.get(source_key), dict)
+                else {}
+            )
+            provider_error = (
+                str(errors.get(source_key) or "").strip()
+                if isinstance(errors, dict)
+                else ""
+            )
+            provider_status = (
+                "fetched" if payload else ("error" if provider_error else "empty")
+            )
 
-            con.execute("DELETE FROM book_bibliographic_sources WHERE book_id = ? AND provider = ?", [book_id, provider])
+            con.execute(
+                "DELETE FROM book_bibliographic_sources WHERE book_id = ? AND provider = ?",
+                [book_id, provider],
+            )
             con.execute(
                 """
                 INSERT INTO book_bibliographic_sources (
@@ -948,7 +518,10 @@ def _fetch_metadata_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
             continue
         grouped.setdefault(book_id, []).append((row[1], row[2], row[3], row[4], row[5]))
 
-    return {book_id: _metadata_from_rows(book_id, grouped_rows) for book_id, grouped_rows in grouped.items()}
+    return {
+        book_id: _metadata_from_rows(book_id, grouped_rows)
+        for book_id, grouped_rows in grouped.items()
+    }
 
 
 def _clear_ocr_data(book_id: str) -> None:
@@ -1009,7 +582,9 @@ def _fetch_ocr_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
 
 def _clear_bibliographic_sources(book_id: str) -> None:
     with get_connection() as con:
-        con.execute("DELETE FROM book_bibliographic_sources WHERE book_id = ?", [book_id])
+        con.execute(
+            "DELETE FROM book_bibliographic_sources WHERE book_id = ?", [book_id]
+        )
 
 
 def _replace_book_images(book_id: str, image_paths: list[str]) -> None:
@@ -1050,7 +625,9 @@ def _clear_payload(book_id: str, payload_type: str, *, con: Any | None = None) -
     )
 
 
-def _replace_payload(book_id: str, payload_type: str, payload: Any, *, con: Any | None = None) -> None:
+def _replace_payload(
+    book_id: str, payload_type: str, payload: Any, *, con: Any | None = None
+) -> None:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
@@ -1089,7 +666,9 @@ def _load_book_images(book_id: str, *, fallback: list[str] | None = None) -> lis
         rows: list[str] = []
         for row in cur.fetchall():
             filename = str(row[0] or "").strip()
-            resolved = _resolve_image_file_path(block=block_value, module=module_value, filename=filename)
+            resolved = _resolve_image_file_path(
+                block=block_value, module=module_value, filename=filename
+            )
             if resolved:
                 rows.append(resolved)
 
@@ -1141,7 +720,9 @@ def _fetch_image_map(book_ids: list[str]) -> dict[str, list[str]]:
         module_value = parts[0] if parts else None
         block_value = parts[1] if parts else None
         filename = str(row[1] or "").strip()
-        image_path = _resolve_image_file_path(block=block_value, module=module_value, filename=filename)
+        image_path = _resolve_image_file_path(
+            block=block_value, module=module_value, filename=filename
+        )
         if not image_path:
             continue
         grouped.setdefault(book_id, []).append(image_path)
@@ -1149,7 +730,9 @@ def _fetch_image_map(book_ids: list[str]) -> dict[str, list[str]]:
     return grouped
 
 
-def _fetch_payload_map(book_ids: list[str], payload_type: str, *, default: Any) -> dict[str, Any]:
+def _fetch_payload_map(
+    book_ids: list[str], payload_type: str, *, default: Any
+) -> dict[str, Any]:
     if payload_type not in PAYLOAD_TYPES:
         raise ValueError(f"Invalid payload_type: {payload_type}")
 
@@ -1206,9 +789,21 @@ def _row_to_dict(
         payload["metadata"] = _load_metadata_from_sources(book_id) if book_id else {}
 
     if ocr_map is not None:
-        ocr_data = ocr_map.get(book_id, {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None})
+        ocr_data = ocr_map.get(
+            book_id,
+            {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None},
+        )
     else:
-        ocr_data = _load_ocr_data(book_id) if book_id else {"credits_text": None, "isbn_raw": None, "isbn": None, "isbn_list": None}
+        ocr_data = (
+            _load_ocr_data(book_id)
+            if book_id
+            else {
+                "credits_text": None,
+                "isbn_raw": None,
+                "isbn": None,
+                "isbn_list": None,
+            }
+        )
     payload["credits_text"] = ocr_data.get("credits_text")
     payload["isbn_raw"] = ocr_data.get("isbn_raw")
     payload["isbn"] = ocr_data.get("isbn")
@@ -1217,12 +812,16 @@ def _row_to_dict(
     if catalog_map is not None:
         payload["catalog"] = catalog_map.get(book_id, {})
     else:
-        payload["catalog"] = _load_payload(book_id, "catalog", default={}) if book_id else {}
+        payload["catalog"] = (
+            _load_payload(book_id, "catalog", default={}) if book_id else {}
+        )
 
     if ocr_trace_map is not None:
         payload["ocr_trace"] = ocr_trace_map.get(book_id, {})
     else:
-        payload["ocr_trace"] = _load_payload(book_id, "ocr_trace", default={}) if book_id else {}
+        payload["ocr_trace"] = (
+            _load_payload(book_id, "ocr_trace", default={}) if book_id else {}
+        )
 
     return payload
 
@@ -1308,6 +907,9 @@ def list_books(
 
 
 def _derive_pipeline_stage_from_dict(book: dict[str, Any]) -> str:
+    if str(book.get("form_status") or "").strip().lower() == "consolidated":
+        return "done"
+
     if bool(book.get("workflow_needs_review")):
         return "review"
 
@@ -1348,7 +950,9 @@ def refresh_pipeline_stage(book_id: str) -> None:
         )
 
 
-def _update_book(book_id: str, fields: dict[str, Any], *, con: Any | None = None) -> None:
+def _update_book(
+    book_id: str, fields: dict[str, Any], *, con: Any | None = None
+) -> None:
     if not fields:
         return
 
@@ -1484,6 +1088,22 @@ def reset_workflow_attempt(book_id: str) -> None:
     _update_book(book_id, {"workflow_attempt": 0})
 
 
+def accept_missing_isbn(book_id: str) -> None:
+    with get_connection() as con:
+        row = con.execute(
+            """
+            UPDATE book_items
+            SET isbn_missing_accepted_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            RETURNING id
+            """,
+            [book_id],
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"Book not found: {book_id}")
+
+
 def reset_from_stage(book_id: str, stage: str) -> None:
     normalized_stage = str(stage or "").strip().lower()
     if normalized_stage not in STAGES:
@@ -1511,6 +1131,7 @@ def reset_from_stage(book_id: str, stage: str) -> None:
                 "cover_path": None,
                 "cover_status": None,
                 "cover_error": None,
+                "isbn_missing_accepted_at": None,
             }
         )
         _clear_payload(book_id, "ocr_trace")
@@ -1555,7 +1176,9 @@ def reset_from_stage(book_id: str, stage: str) -> None:
     refresh_pipeline_stage(book_id)
 
 
-def recover_stale_running_workflows(*, reason: str = "Recovered after backend restart") -> int:
+def recover_stale_running_workflows(
+    *, reason: str = "Recovered after backend restart"
+) -> int:
     with get_connection() as con:
         cur = con.execute(
             """
@@ -1607,9 +1230,15 @@ def ingest_covers(
 
     modules = _iter_modules_from_structure(base)
     if scope_block and scope_module:
-        modules = [item for item in modules if item[0] == scope_block and item[1] == scope_module]
+        modules = [
+            item
+            for item in modules
+            if item[0] == scope_block and item[1] == scope_module
+        ]
         if not modules:
-            raise ValueError(f"Module not found in folder structure: {scope_block}/{scope_module}")
+            raise ValueError(
+                f"Module not found in folder structure: {scope_block}/{scope_module}"
+            )
 
     grouped: dict[str, list[str]] = {}
     skipped_invalid = 0
@@ -1641,7 +1270,9 @@ def ingest_covers(
             if id_block != module_block or id_module != module_name:
                 skipped_scope_mismatch += 1
                 if len(skipped_scope_mismatch_examples) < 30:
-                    skipped_scope_mismatch_examples.append(str(file_path.relative_to(base)))
+                    skipped_scope_mismatch_examples.append(
+                        str(file_path.relative_to(base))
+                    )
                 continue
 
             grouped.setdefault(book_id, []).append(str(file_path))
@@ -1720,10 +1351,18 @@ def ingest_covers(
             continue
 
         current_block, current_module, current_seq = current_item
-        if (current_block != block_value) or (current_module != module_value) or (current_seq != seq):
+        if (
+            (current_block != block_value)
+            or (current_module != module_value)
+            or (current_seq != seq)
+        ):
             update_rows.append((block_value, module_value, seq, book_id))
 
-        previous_filenames = [str(name).strip() for name in existing_images.get(book_id, []) if str(name).strip()]
+        previous_filenames = [
+            str(name).strip()
+            for name in existing_images.get(book_id, [])
+            if str(name).strip()
+        ]
         if overwrite_existing_paths:
             merged_filenames = filenames
         else:
@@ -1755,7 +1394,10 @@ def ingest_covers(
             if unique_replace_ids:
                 for ids_chunk in _chunked(unique_replace_ids):
                     placeholders = ", ".join(["?"] * len(ids_chunk))
-                    con.execute(f"DELETE FROM book_image_files WHERE book_id IN ({placeholders})", ids_chunk)
+                    con.execute(
+                        f"DELETE FROM book_image_files WHERE book_id IN ({placeholders})",
+                        ids_chunk,
+                    )
                 _bulk_insert_book_image_files(con, image_insert_rows)
 
     for book_id in sorted(set(reset_candidates)):
@@ -1818,10 +1460,13 @@ def update_ocr(
                 "ocr_error": error,
                 "ocr_provider": provider,
                 "ocr_model": model,
+                "isbn_missing_accepted_at": None,
             },
             con=con,
         )
-        _replace_payload(book_id, "ocr_trace", trace if trace is not None else {}, con=con)
+        _replace_payload(
+            book_id, "ocr_trace", trace if trace is not None else {}, con=con
+        )
         _upsert_ocr_data(
             book_id=book_id,
             credits_text=credits_text,
@@ -1833,7 +1478,9 @@ def update_ocr(
     refresh_pipeline_stage(book_id)
 
 
-def update_metadata(book_id: str, *, metadata: dict[str, Any], status: str, error: str | None = None) -> None:
+def update_metadata(
+    book_id: str, *, metadata: dict[str, Any], status: str, error: str | None = None
+) -> None:
     with get_connection() as con:
         _update_book(
             book_id,
@@ -1847,7 +1494,9 @@ def update_metadata(book_id: str, *, metadata: dict[str, Any], status: str, erro
     refresh_pipeline_stage(book_id)
 
 
-def update_catalog(book_id: str, *, catalog: dict[str, Any], status: str, error: str | None = None) -> None:
+def update_catalog(
+    book_id: str, *, catalog: dict[str, Any], status: str, error: str | None = None
+) -> None:
     with get_connection() as con:
         _update_book(
             book_id,
@@ -1863,7 +1512,9 @@ def update_catalog(book_id: str, *, catalog: dict[str, Any], status: str, error:
     refresh_pipeline_stage(book_id)
 
 
-def update_cover(book_id: str, *, cover_path: str | None, status: str, error: str | None = None) -> None:
+def update_cover(
+    book_id: str, *, cover_path: str | None, status: str, error: str | None = None
+) -> None:
     _update_book(
         book_id,
         {
@@ -1889,7 +1540,10 @@ def books_for_stage(
 
     scope_block, scope_module = resolve_scope(block, module, require=False)
 
-    where = ["workflow_needs_review = FALSE"]
+    where = [
+        "workflow_needs_review = FALSE",
+        "COALESCE(form_status, 'not_started') <> 'consolidated'",
+    ]
     params: list[Any] = []
 
     if scope_block:
@@ -1931,7 +1585,10 @@ def count_books_for_stage(
 
     scope_block, scope_module = resolve_scope(block, module, require=False)
 
-    where = ["workflow_needs_review = FALSE"]
+    where = [
+        "workflow_needs_review = FALSE",
+        "COALESCE(form_status, 'not_started') <> 'consolidated'",
+    ]
     params: list[Any] = []
 
     if scope_block:
@@ -1999,7 +1656,9 @@ def _as_clean_text(value: Any) -> str | None:
 
 def _list_to_text(value: Any, *, separator: str = "; ") -> str | None:
     if isinstance(value, list):
-        items = [item for item in (_normalize_nullable_text(item) for item in value) if item]
+        items = [
+            item for item in (_normalize_nullable_text(item) for item in value) if item
+        ]
         return separator.join(items) if items else None
     return _normalize_nullable_text(value)
 
@@ -2024,14 +1683,12 @@ def _first_image_filename(book_id: str) -> str | None:
 
 def get_books_allowed_values() -> dict[str, list[str]]:
     with get_connection() as con:
-        rows = con.execute(
-            """
+        rows = con.execute("""
             SELECT field_name, field_value
             FROM book_field_allowed_values
             WHERE table_name = 'books'
             ORDER BY field_name, sort_order, field_value
-            """
-        ).fetchall()
+            """).fetchall()
 
     grouped: dict[str, list[str]] = {}
     for field_name, field_value in rows:
@@ -2265,7 +1922,9 @@ def build_core_description(record: dict[str, Any]) -> str:
     volumen = _as_clean_text(record.get("volumen"))
     titulo = _as_clean_text(record.get("titulo"))
     if obra_completa and obra_completa != titulo:
-        volume_text = _format_volume(volumen, with_collection_title=True) if volumen else ""
+        volume_text = (
+            _format_volume(volumen, with_collection_title=True) if volumen else ""
+        )
         if volume_text:
             add_sentence(f"{obra_completa}, {volume_text}")
         else:
@@ -2328,7 +1987,9 @@ def build_core_description(record: dict[str, Any]) -> str:
     return " ".join(parts).strip()
 
 
-def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> dict[str, Any]:
+def _core_autofill_fields_from_catalog(
+    book_id: str, book: dict[str, Any]
+) -> dict[str, Any]:
     catalog = book.get("catalog") if isinstance(book.get("catalog"), dict) else {}
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
 
@@ -2340,7 +2001,11 @@ def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> di
     elif not titulo_completo:
         titulo_completo = titulo
 
-    isbn = _as_clean_text(catalog.get("isbn")) or _as_clean_text(book.get("isbn")) or _as_clean_text(metadata.get("isbn"))
+    isbn = (
+        _as_clean_text(catalog.get("isbn"))
+        or _as_clean_text(book.get("isbn"))
+        or _as_clean_text(metadata.get("isbn"))
+    )
     autor = _list_to_text(catalog.get("autor"), separator="; ")
     idioma = _list_to_text(catalog.get("idioma"), separator="; ")
     palabras = _normalize_keywords_for_isbn(catalog.get("palabras_clave"), isbn=isbn)
@@ -2392,7 +2057,9 @@ def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> di
         "ilustrador": _list_to_text(catalog.get("ilustrador"), separator="; "),
         "editor": _list_to_text(catalog.get("editor"), separator="; "),
         "fotografia_de": _list_to_text(catalog.get("fotografia_de"), separator="; "),
-        "introduccion_de": _list_to_text(catalog.get("introduccion_de"), separator="; "),
+        "introduccion_de": _list_to_text(
+            catalog.get("introduccion_de"), separator="; "
+        ),
         "epilogo_de": _list_to_text(catalog.get("epilogo_de"), separator="; "),
         "categoria": _as_clean_text(catalog.get("categoria")),
         "genero": _as_clean_text(catalog.get("genero")),
@@ -2414,7 +2081,44 @@ def _core_autofill_fields_from_catalog(book_id: str, book: dict[str, Any]) -> di
     }
 
 
-def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) -> dict[str, Any] | None:
+def _select_core_book(book_id: str) -> dict[str, Any] | None:
+    selected_columns = ", ".join(f"b.{column}" for column in CORE_BOOKS_COLUMNS)
+    with get_connection() as con:
+        cur = con.execute(
+            f"""
+            SELECT {selected_columns},
+                   COALESCE(bi.form_status, 'draft') AS form_status,
+                   bi.form_consolidated_at,
+                   bi.isbn_missing_accepted_at
+            FROM books AS b
+            LEFT JOIN book_items AS bi ON bi.id = b.id
+            WHERE b.id = ?
+            """,
+            [book_id],
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+    output = {
+        column: _json_safe_db_value(row[index])
+        for index, column in enumerate(CORE_BOOKS_COLUMNS)
+    }
+    state_offset = len(CORE_BOOKS_COLUMNS)
+    output.update(
+        {
+            "form_status": str(row[state_offset] or "draft"),
+            "form_consolidated_at": row[state_offset + 1],
+            "isbn_missing_accepted_at": row[state_offset + 2],
+            "has_core_book": True,
+        }
+    )
+    return output
+
+
+def sync_core_book_from_catalog(
+    book_id: str, *, force_overwrite: bool = False
+) -> dict[str, Any] | None:
     normalized_id = normalize_book_id(book_id)
     if not normalized_id:
         return None
@@ -2422,6 +2126,13 @@ def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) 
     book = get_book(normalized_id)
     if not book:
         return None
+    form_status = str(book.get("form_status") or "not_started").strip().lower()
+    if form_status == "consolidated":
+        if force_overwrite:
+            raise CoreBookLockedError(
+                "La ficha está consolidada; reábrela antes de resincronizarla."
+            )
+        return _select_core_book(normalized_id)
 
     values = _core_autofill_fields_from_catalog(normalized_id, book)
 
@@ -2432,7 +2143,11 @@ def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) 
         )
         existing_row = existing_cur.fetchone()
         if existing_row is None:
-            insert_columns = [column for column in CORE_BOOKS_COLUMNS if values.get(column) not in (None, "")]
+            insert_columns = [
+                column
+                for column in CORE_BOOKS_COLUMNS
+                if values.get(column) not in (None, "")
+            ]
             if "id" not in insert_columns:
                 insert_columns = ["id", *insert_columns]
             insert_params = [values.get(column) for column in insert_columns]
@@ -2442,7 +2157,10 @@ def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) 
                 insert_params,
             )
         else:
-            existing = {column: existing_row[index] for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+            existing = {
+                column: existing_row[index]
+                for index, column in enumerate(CORE_BOOKS_COLUMNS)
+            }
             updates: dict[str, Any] = {}
             for column, value in values.items():
                 if column == "id":
@@ -2459,18 +2177,53 @@ def sync_core_book_from_catalog(book_id: str, *, force_overwrite: bool = False) 
             if updates:
                 assignments = ", ".join(f"{column} = ?" for column in updates)
                 params = [updates[column] for column in updates]
-                params.append(normalized_id)
-                con.execute(f"UPDATE books SET {assignments} WHERE id = ?", params)
-
-        cur = con.execute(
-            f"SELECT {', '.join(CORE_BOOKS_COLUMNS)} FROM books WHERE id = ?",
+                params.extend([normalized_id, normalized_id])
+                updated = con.execute(
+                    f"""
+                    UPDATE books
+                    SET {assignments}
+                    WHERE id = ?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM book_items
+                          WHERE id = ?
+                            AND COALESCE(form_status, 'not_started')
+                                <> 'consolidated'
+                      )
+                    RETURNING id
+                    """,
+                    params,
+                ).fetchone()
+                if updated is None and force_overwrite:
+                    state = con.execute(
+                        "SELECT form_status FROM book_items WHERE id = ?",
+                        [normalized_id],
+                    ).fetchone()
+                    if state and str(state[0] or "").strip().lower() == "consolidated":
+                        raise CoreBookLockedError(
+                            "La ficha está consolidada; reábrela antes de "
+                            "resincronizarla."
+                        )
+        con.execute(
+            """
+            UPDATE book_items
+            SET form_status = 'draft',
+                form_consolidated_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND COALESCE(form_status, 'not_started') <> 'consolidated'
+            """,
             [normalized_id],
         )
-        row = cur.fetchone()
 
-    if not row:
+    return _select_core_book(normalized_id)
+
+
+def create_core_book_draft(book_id: str) -> dict[str, Any] | None:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id or get_book(normalized_id) is None:
         return None
-    return {column: _json_safe_db_value(row[index]) for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+    return sync_core_book_from_catalog(normalized_id, force_overwrite=False)
 
 
 def bootstrap_core_books(
@@ -2483,7 +2236,8 @@ def bootstrap_core_books(
 
     sql = (
         "SELECT id FROM book_items "
-        "WHERE COALESCE(catalog_status, '') IN ('built', 'partial', 'manual')"
+        "WHERE COALESCE(catalog_status, '') IN ('built', 'partial', 'manual') "
+        "AND COALESCE(form_status, 'not_started') <> 'consolidated'"
     )
     params: list[Any] = []
     if scope_block:
@@ -2496,7 +2250,11 @@ def bootstrap_core_books(
     params.append(int(limit))
 
     with get_connection() as con:
-        ids = [str(row[0]) for row in con.execute(sql, params).fetchall() if str(row[0]).strip()]
+        ids = [
+            str(row[0])
+            for row in con.execute(sql, params).fetchall()
+            if str(row[0]).strip()
+        ]
 
     inserted_or_updated = 0
     for book_id in ids:
@@ -2521,10 +2279,12 @@ def list_core_books(
     scope_block, scope_module = resolve_scope(block, module, require=False)
 
     sql = (
-        "SELECT b.id, b.titulo, b.autor, b.editorial, b.estado_stock, b.estado_carga, b.precio, "
-        "bi.block, bi.module "
-        "FROM books b "
-        "LEFT JOIN book_items bi ON bi.id = b.id "
+        "SELECT bi.id, b.titulo, b.autor, b.editorial, b.estado_stock, "
+        "b.estado_carga, b.precio, bi.block, bi.module, "
+        "COALESCE(bi.form_status, 'not_started'), bi.form_consolidated_at, "
+        "(b.id IS NOT NULL) AS has_core_book "
+        "FROM book_items bi "
+        "LEFT JOIN books b ON b.id = bi.id "
     )
     where: list[str] = []
     params: list[Any] = []
@@ -2536,7 +2296,7 @@ def list_core_books(
         params.append(scope_module)
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY b.id LIMIT ?"
+    sql += " ORDER BY bi.id LIMIT ?"
     params.append(int(limit))
 
     with get_connection() as con:
@@ -2555,28 +2315,22 @@ def list_core_books(
                 "precio": _json_safe_db_value(row[6]),
                 "block": _as_clean_text(row[7]),
                 "module": _as_clean_text(row[8]),
+                "form_status": _as_clean_text(row[9]) or "not_started",
+                "form_consolidated_at": row[10],
+                "has_core_book": bool(row[11]),
             }
         )
     return output
 
 
-def get_core_book(book_id: str, *, bootstrap: bool = True) -> dict[str, Any] | None:
+def get_core_book(book_id: str, *, bootstrap: bool = False) -> dict[str, Any] | None:
     normalized_id = normalize_book_id(book_id)
     if not normalized_id:
         return None
 
     if bootstrap:
         sync_core_book_from_catalog(normalized_id)
-
-    with get_connection() as con:
-        cur = con.execute(
-            f"SELECT {', '.join(CORE_BOOKS_COLUMNS)} FROM books WHERE id = ?",
-            [normalized_id],
-        )
-        row = cur.fetchone()
-    if not row:
-        return None
-    return {column: _json_safe_db_value(row[index]) for index, column in enumerate(CORE_BOOKS_COLUMNS)}
+    return _select_core_book(normalized_id)
 
 
 def update_core_book(
@@ -2589,9 +2343,13 @@ def update_core_book(
     if not normalized_id:
         raise ValueError(f"Invalid book id: {book_id}")
 
-    current = get_core_book(normalized_id, bootstrap=True)
+    current = get_core_book(normalized_id, bootstrap=False)
     if current is None:
         raise ValueError(f"Book not found in core table: {normalized_id}")
+    if str(current.get("form_status") or "").strip().lower() == "consolidated":
+        raise CoreBookLockedError(
+            "La ficha está consolidada; reábrela antes de modificarla."
+        )
 
     updates: dict[str, Any] = {}
     for raw_key, raw_value in fields.items():
@@ -2627,14 +2385,97 @@ def update_core_book(
 
     assignments = ", ".join(f"{field} = ?" for field in updates)
     params = [updates[field] for field in updates]
-    params.append(normalized_id)
+    params.extend([normalized_id, normalized_id])
     with get_connection() as con:
-        con.execute(f"UPDATE books SET {assignments} WHERE id = ?", params)
+        updated = con.execute(
+            f"""
+            UPDATE books
+            SET {assignments}
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1
+                  FROM book_items
+                  WHERE id = ?
+                    AND COALESCE(form_status, 'not_started') <> 'consolidated'
+              )
+            RETURNING id
+            """,
+            params,
+        ).fetchone()
+        if updated is None:
+            raise CoreBookLockedError(
+                "La ficha está consolidada; reábrela antes de modificarla."
+            )
+        con.execute(
+            """
+            UPDATE book_items
+            SET form_status = 'draft',
+                form_consolidated_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND COALESCE(form_status, 'not_started') <> 'consolidated'
+            """,
+            [normalized_id],
+        )
 
     refreshed = get_core_book(normalized_id, bootstrap=False)
     if refreshed is None:
         raise ValueError(f"Book not found after update: {normalized_id}")
     return refreshed
+
+
+def consolidate_core_book(book_id: str) -> dict[str, Any]:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id:
+        raise ValueError(f"Invalid book id: {book_id}")
+    if _select_core_book(normalized_id) is None:
+        raise ValueError(f"Book not found in core table: {normalized_id}")
+
+    with get_connection() as con:
+        con.execute(
+            """
+            UPDATE book_items
+            SET form_status = 'consolidated',
+                form_consolidated_at = CURRENT_TIMESTAMP,
+                workflow_status = 'done',
+                workflow_current_node = 'form_consolidated',
+                workflow_action = NULL,
+                workflow_needs_review = FALSE,
+                workflow_review_reason = NULL,
+                pipeline_stage = 'done',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            [normalized_id],
+        )
+    result = _select_core_book(normalized_id)
+    if result is None:
+        raise ValueError(f"Book not found after consolidation: {normalized_id}")
+    return result
+
+
+def reopen_core_book(book_id: str) -> dict[str, Any]:
+    normalized_id = normalize_book_id(book_id)
+    if not normalized_id:
+        raise ValueError(f"Invalid book id: {book_id}")
+    if _select_core_book(normalized_id) is None:
+        raise ValueError(f"Book not found in core table: {normalized_id}")
+
+    with get_connection() as con:
+        con.execute(
+            """
+            UPDATE book_items
+            SET form_status = 'draft',
+                form_consolidated_at = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            [normalized_id],
+        )
+    result = _select_core_book(normalized_id)
+    if result is None:
+        raise ValueError(f"Book not found after reopening: {normalized_id}")
+    return result
 
 
 def _append_scope_where(sql: str, scope_where: list[str]) -> str:
@@ -2657,12 +2498,20 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         scope_params.append(scope_module)
 
     with get_connection() as con:
-        total = int(con.execute(_append_scope_where("SELECT COUNT(*) FROM book_items", scope_where), scope_params).fetchone()[0])
+        total = int(
+            con.execute(
+                _append_scope_where("SELECT COUNT(*) FROM book_items", scope_where),
+                scope_params,
+            ).fetchone()[0]
+        )
 
         needs_ocr = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(ocr_status, '') NOT IN ('processed', 'manual', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items "
+                    "WHERE COALESCE(form_status, 'not_started') <> 'consolidated' "
+                    "AND COALESCE(ocr_status, '') "
+                    "NOT IN ('processed', 'manual', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -2672,7 +2521,10 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_metadata = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(metadata_status, '') NOT IN ('fetched', 'partial', 'manual', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items "
+                    "WHERE COALESCE(form_status, 'not_started') <> 'consolidated' "
+                    "AND COALESCE(metadata_status, '') "
+                    "NOT IN ('fetched', 'partial', 'manual', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -2682,7 +2534,10 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_catalog = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(catalog_status, '') NOT IN ('built', 'partial', 'manual')",
+                    "SELECT COUNT(*) FROM book_items "
+                    "WHERE COALESCE(form_status, 'not_started') <> 'consolidated' "
+                    "AND COALESCE(catalog_status, '') "
+                    "NOT IN ('built', 'partial', 'manual')",
                     scope_where,
                 ),
                 scope_params,
@@ -2692,7 +2547,10 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         needs_cover = int(
             con.execute(
                 _append_scope_where(
-                    "SELECT COUNT(*) FROM book_items WHERE COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')",
+                    "SELECT COUNT(*) FROM book_items "
+                    "WHERE COALESCE(form_status, 'not_started') <> 'consolidated' "
+                    "AND COALESCE(cover_status, '') "
+                    "NOT IN ('downloaded', 'missing', 'skipped')",
                     scope_where,
                 ),
                 scope_params,
@@ -2701,7 +2559,21 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
 
         needs_review = int(
             con.execute(
-                _append_scope_where("SELECT COUNT(*) FROM book_items WHERE workflow_needs_review = TRUE", scope_where),
+                _append_scope_where(
+                    "SELECT COUNT(*) FROM book_items WHERE workflow_needs_review = TRUE",
+                    scope_where,
+                ),
+                scope_params,
+            ).fetchone()[0]
+        )
+
+        consolidated = int(
+            con.execute(
+                _append_scope_where(
+                    "SELECT COUNT(*) FROM book_items "
+                    "WHERE form_status = 'consolidated'",
+                    scope_where,
+                ),
                 scope_params,
             ).fetchone()[0]
         )
@@ -2713,4 +2585,5 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
         "needs_catalog": needs_catalog,
         "needs_cover": needs_cover,
         "needs_workflow_review": needs_review,
+        "form_consolidated": consolidated,
     }

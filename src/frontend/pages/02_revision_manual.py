@@ -147,14 +147,24 @@ def _unique(values: list[str]) -> list[str]:
 
 def _derive_isbn_from_text(text: str | None) -> dict:
     body = str(text or "")
-    raw_candidates = [_clean_isbn(match) for match in ISBN_CANDIDATE_PATTERN.findall(body)]
+    raw_candidates = [
+        _clean_isbn(match) for match in ISBN_CANDIDATE_PATTERN.findall(body)
+    ]
     raw_candidates = _unique([value for value in raw_candidates if value])
 
-    normalized_candidates = _unique([_normalize_ocular_isbn_confusions(value) for value in raw_candidates])
-    valid_candidates = _unique([value for value in raw_candidates if _is_valid_isbn(value)])
-    normalized_valid_candidates = _unique([value for value in normalized_candidates if _is_valid_isbn(value)])
+    normalized_candidates = _unique(
+        [_normalize_ocular_isbn_confusions(value) for value in raw_candidates]
+    )
+    valid_candidates = _unique(
+        [value for value in raw_candidates if _is_valid_isbn(value)]
+    )
+    normalized_valid_candidates = _unique(
+        [value for value in normalized_candidates if _is_valid_isbn(value)]
+    )
     candidate_details = [_isbn_candidate_detail(value) for value in raw_candidates]
-    normalized_candidate_details = [_isbn_candidate_detail(value) for value in normalized_candidates]
+    normalized_candidate_details = [
+        _isbn_candidate_detail(value) for value in normalized_candidates
+    ]
 
     selected = None
     selected_source = None
@@ -210,7 +220,11 @@ def _review_origin_stage(book: dict) -> str | None:
             return candidate
 
     for stage in STAGE_ORDER:
-        if node == stage or node.startswith(f"{stage}_") or node.startswith(f"{stage}:"):
+        if (
+            node == stage
+            or node.startswith(f"{stage}_")
+            or node.startswith(f"{stage}:")
+        ):
             return stage
 
     for stage in STAGE_ORDER:
@@ -287,7 +301,9 @@ def _queue_form_patch(
         st.session_state[f"ocr_review_pending_patch_{book_id}"] = patch
 
 
-scope_block, scope_module = select_module_scope(key_prefix="review_scope", title="Módulo de trabajo")
+scope_block, scope_module = select_module_scope(
+    key_prefix="review_scope", title="Módulo de trabajo"
+)
 if not scope_module:
     st.stop()
 
@@ -336,7 +352,9 @@ if not filtered_rows:
     st.info("No hay libros con los filtros actuales.")
     st.stop()
 
-book_ids = [str(row.get("id") or "") for row in filtered_rows if str(row.get("id") or "")]
+book_ids = [
+    str(row.get("id") or "") for row in filtered_rows if str(row.get("id") or "")
+]
 selector_key = "book_ocr_review_selector"
 selector_pending_key = "book_ocr_review_selector_pending"
 
@@ -344,7 +362,10 @@ pending_selected = st.session_state.pop(selector_pending_key, None)
 if pending_selected in book_ids:
     st.session_state[selector_key] = pending_selected
 
-if selector_key in st.session_state and st.session_state.get(selector_key) not in book_ids:
+if (
+    selector_key in st.session_state
+    and st.session_state.get(selector_key) not in book_ids
+):
     st.session_state[selector_key] = book_ids[0]
 
 selected_id = select_book_id(filtered_rows, label="Selecciona libro", key=selector_key)
@@ -356,7 +377,11 @@ with col_prev:
         st.session_state[selector_pending_key] = book_ids[current_index - 1]
         st.rerun()
 with col_next:
-    if st.button("Siguiente", disabled=current_index == len(book_ids) - 1, key="book_ocr_review_next"):
+    if st.button(
+        "Siguiente",
+        disabled=current_index == len(book_ids) - 1,
+        key="book_ocr_review_next",
+    ):
         st.session_state[selector_pending_key] = book_ids[current_index + 1]
         st.rerun()
 
@@ -405,8 +430,12 @@ with right:
 
     metrics_a, metrics_b, metrics_c = st.columns(3)
     metrics_a.metric("ISBN validado", "si" if bool(book.get("isbn")) else "no")
-    metrics_b.metric("Cand. detectados", len(validation_from_text.get("raw_candidates") or []))
-    metrics_c.metric("Cand. validos", len(validation_from_text.get("valid_candidates") or []))
+    metrics_b.metric(
+        "Cand. detectados", len(validation_from_text.get("raw_candidates") or [])
+    )
+    metrics_c.metric(
+        "Cand. validos", len(validation_from_text.get("valid_candidates") or [])
+    )
 
     if validation_from_text.get("isbn"):
         st.success(
@@ -414,7 +443,9 @@ with right:
             f"({validation_from_text.get('source')})"
         )
     elif st.session_state.get(credits_key, "").strip():
-        st.warning("No hay ISBN valido detectado en el texto OCR con las reglas actuales.")
+        st.warning(
+            "No hay ISBN valido detectado en el texto OCR con las reglas actuales."
+        )
 
     manual_isbn_input = str(st.session_state.get(isbn_key, "")).strip()
     manual_raw_input = str(st.session_state.get(isbn_raw_key, "")).strip()
@@ -494,7 +525,9 @@ with right:
                 if isbn_value:
                     st.success(f"ISBN final validado: {isbn_value}")
                 else:
-                    st.warning("No se pudo validar ISBN final (se guardo OCR y ISBN raw).")
+                    st.warning(
+                        "No se pudo validar ISBN final (se guardo OCR y ISBN raw)."
+                    )
                 with st.expander("Resultado de guardado", expanded=False):
                     st.json(result)
             st.rerun()
@@ -525,30 +558,50 @@ st.divider()
 st.subheader("Acciones de review")
 
 if bool(book.get("workflow_needs_review")):
-    st.warning(str(book.get("workflow_review_reason") or "Requiere revisión manual"))
+    review_reason = str(
+        book.get("workflow_review_reason") or "Requiere revisión manual"
+    )
+    st.warning(review_reason)
     origin_stage = _review_origin_stage(book)
+    accepts_missing_isbn = (
+        review_reason.strip().lower().startswith("ocr_isbn_validation")
+    )
 
     if origin_stage:
-        st.caption(f"Entró en review desde etapa: **{STAGE_LABELS.get(origin_stage, origin_stage)}**")
+        st.caption(
+            f"Entró en review desde etapa: **{STAGE_LABELS.get(origin_stage, origin_stage)}**"
+        )
     else:
         st.caption("No se pudo inferir con precisión la etapa origen de review.")
 
     retry_options = _retry_stage_options(book, origin_stage=origin_stage)
-    default_retry_stage = origin_stage if origin_stage in retry_options else retry_options[-1]
+    default_retry_stage = (
+        origin_stage if origin_stage in retry_options else retry_options[-1]
+    )
     retry_selector_key = f"book_review_retry_stage_{selected_id}"
     if retry_selector_key not in st.session_state:
         st.session_state[retry_selector_key] = default_retry_stage
 
     action_col_a, action_col_b = st.columns(2)
     with action_col_a:
-        if st.button("Aprobar y salir de review", key="book_review_approve"):
+        approve_label = (
+            "Aceptar que no tiene ISBN y salir de review"
+            if accepts_missing_isbn
+            else "Aprobar y salir de review"
+        )
+        if st.button(approve_label, key="book_review_approve"):
             try:
                 api_post(
                     f"/workflow/review/{selected_id}",
                     json={"action": "approve"},
                     timeout=60.0,
                 )
-                st.success("Libro aprobado")
+                if accepts_missing_isbn:
+                    st.success(
+                        "Ausencia de ISBN aceptada. El libro puede continuar desde metadata."
+                    )
+                else:
+                    st.success("Libro aprobado")
                 st.rerun()
             except Exception as exc:
                 st.error(f"No se pudo aprobar el libro: {exc}")
@@ -570,7 +623,9 @@ if bool(book.get("workflow_needs_review")):
                     catalog_provider_default = "openai"
 
                 ocr_model_default = (
-                    OCR_OPENAI_MODEL_DEFAULT if ocr_provider_default == "openai" else OCR_OLLAMA_MODEL_DEFAULT
+                    OCR_OPENAI_MODEL_DEFAULT
+                    if ocr_provider_default == "openai"
+                    else OCR_OLLAMA_MODEL_DEFAULT
                 )
                 catalog_model_default = (
                     CATALOG_OPENAI_MODEL_DEFAULT

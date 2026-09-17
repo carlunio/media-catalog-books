@@ -49,10 +49,11 @@ else:
     st.caption(f"Scope activo: {active_block} (sin módulos)")
 stats = load_stats(block=active_block, module=active_module)
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("Total", stats.get("total", 0))
 col2.metric("En review", stats.get("needs_workflow_review", 0))
 col3.metric("Pend. OCR", stats.get("needs_ocr", 0))
+col4.metric("Consolidadas", stats.get("form_consolidated", 0))
 
 selected_book = get_selected_book_id()
 if selected_book:
