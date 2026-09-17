@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-17
+
 ### Added
 - Controlador multiplataforma `scripts/appctl.py` para preparar, arrancar, actualizar, detener y diagnosticar la instalación sin depender de GNU Make.
 - Lanzador de diagnóstico para Windows y Linux.
@@ -43,7 +45,7 @@
   la sincronización desde la catalogación automática es una acción expresa.
 
 ### Fixed
-- La versión expuesta por `pyproject.toml`, FastAPI y Streamlit vuelve a coincidir con la última release documentada (`0.1.1`).
+- La versión expuesta por `pyproject.toml`, FastAPI y Streamlit vuelve a coincidir con la release publicada (`1.0.0`).
 - Los recursos locales dejan de proponerse para versionado: `make setup` descarga la tabla ISO 639-3 oficial y admite preparar el icono opcional mediante `APP_ICON_URL`.
 - La distribución de idiomas pasa a ser `python-iso639` y `langcodes[data]`, que corresponden a las API realmente usadas.
 - El proveedor predeterminado de catálogo queda alineado con `.env.example` y la interfaz: Ollama.
