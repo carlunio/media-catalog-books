@@ -1,3 +1,6 @@
+import base64
+import hashlib
+from datetime import datetime
 from typing import Any
 
 import streamlit as st
@@ -6,11 +9,20 @@ try:
     from src.frontend.utils import (
         LONG_TIMEOUT_SECONDS,
         api_get,
+        api_get_bytes,
         api_post,
         configure_page,
+        select_module_scope,
     )
 except ModuleNotFoundError:  # pragma: no cover
-    from frontend.utils import LONG_TIMEOUT_SECONDS, api_get, api_post, configure_page
+    from frontend.utils import (
+        LONG_TIMEOUT_SECONDS,
+        api_get,
+        api_get_bytes,
+        api_post,
+        configure_page,
+        select_module_scope,
+    )
 
 configure_page("Datos | Media Catalog Books")
 st.title("Fase 5 - Datos")
@@ -53,6 +65,223 @@ def _snapshot_rows(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+st.subheader("Revisión externa en Excel")
+with st.container(border=True):
+    st.write(
+        "Exporta las fichas de un módulo como archivo .xlsx, complétalas fuera de "
+        "la aplicación y vuelve a importarlas. El archivo usa texto Unicode y "
+        "conserva ISBN y referencias como texto."
+    )
+    st.caption(
+        "La importación analiza primero todos los cambios. No modifica la base "
+        "hasta que revises el informe y confirmes la operación."
+    )
+
+    review_block, review_module = select_module_scope(
+        key_prefix="external_review_scope",
+        title="Fichas que se incluirán en el Excel",
+    )
+    status_labels = {
+        "Borradores": "draft",
+        "Consolidadas": "consolidated",
+        "Todas las fichas existentes": "all",
+    }
+    selected_status_label = st.selectbox(
+        "Estado de las fichas",
+        list(status_labels),
+        key="external_review_status",
+    )
+    selected_status = status_labels[selected_status_label]
+
+    if st.button(
+        "Preparar Excel de revisión",
+        type="primary",
+        disabled=not review_module,
+        key="external_review_export",
+    ):
+        try:
+            workbook_bytes = api_get_bytes(
+                "/core-books/review-workbook",
+                params={
+                    "block": review_block,
+                    "module": review_module,
+                    "form_status": selected_status,
+                },
+                timeout=LONG_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            st.error(f"No se pudo preparar el Excel: {exc}")
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.session_state["external_review_export_bytes"] = workbook_bytes
+            st.session_state["external_review_export_name"] = (
+                f"revision_{review_module}{review_block}_{selected_status}_"
+                f"{timestamp}.xlsx"
+            )
+            st.success("Excel preparado. Ya puedes descargarlo.")
+
+    export_bytes = st.session_state.get("external_review_export_bytes")
+    export_name = st.session_state.get("external_review_export_name")
+    if isinstance(export_bytes, (bytes, bytearray)) and export_name:
+        st.download_button(
+            "Descargar Excel de revisión",
+            data=bytes(export_bytes),
+            file_name=str(export_name),
+            mime=(
+                "application/vnd.openxmlformats-officedocument." "spreadsheetml.sheet"
+            ),
+            key="external_review_download",
+        )
+
+    st.divider()
+    uploaded_workbook = st.file_uploader(
+        "Excel de revisión completado",
+        type="xlsx",
+        max_upload_size=25,
+        key="external_review_upload",
+        help="Debe ser el mismo archivo generado por esta sección.",
+    )
+
+    if uploaded_workbook is not None:
+        uploaded_bytes = uploaded_workbook.getvalue()
+        uploaded_digest = hashlib.sha256(uploaded_bytes).hexdigest()
+        if st.session_state.get("external_review_uploaded_digest") != uploaded_digest:
+            st.session_state["external_review_uploaded_digest"] = uploaded_digest
+            st.session_state.pop("external_review_preview", None)
+            st.session_state.pop("external_review_import_bytes", None)
+
+        if st.button(
+            "Analizar cambios del Excel",
+            key="external_review_preview_button",
+        ):
+            try:
+                preview = api_post(
+                    "/core-books/review-workbook/preview",
+                    json={
+                        "content_base64": base64.b64encode(uploaded_bytes).decode(
+                            "ascii"
+                        )
+                    },
+                    timeout=LONG_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                st.session_state.pop("external_review_preview", None)
+                st.session_state.pop("external_review_import_bytes", None)
+                st.error(f"No se pudo analizar el Excel: {exc}")
+            else:
+                st.session_state["external_review_preview"] = preview
+                st.session_state["external_review_import_bytes"] = uploaded_bytes
+
+    preview = st.session_state.get("external_review_preview")
+    if isinstance(preview, dict):
+        workbook_info = preview.get("workbook") or {}
+        st.caption(
+            "Plantilla: "
+            f"{workbook_info.get('block')}/{workbook_info.get('module')} · "
+            f"{preview.get('rows', 0)} fichas · "
+            f"{workbook_info.get('format', 'OOXML (.xlsx)')}"
+        )
+
+        metric_books, metric_fields, metric_errors, metric_warnings = st.columns(4)
+        metric_books.metric(
+            "Fichas con cambios",
+            int(preview.get("changed_books") or 0),
+        )
+        metric_fields.metric(
+            "Campos que cambiarán",
+            int(preview.get("changed_fields") or 0),
+        )
+        metric_errors.metric(
+            "Errores",
+            int(preview.get("errors_count") or 0),
+        )
+        metric_warnings.metric(
+            "Avisos",
+            int(preview.get("warnings_count") or 0),
+        )
+
+        errors = list(preview.get("errors") or [])
+        warnings = list(preview.get("warnings") or [])
+        changes = list(preview.get("changes") or [])
+
+        if errors:
+            st.error(
+                "Hay errores que impiden importar. Corrígelos en el Excel y "
+                "vuelve a analizarlo."
+            )
+            st.dataframe(errors, hide_index=True, width="stretch")
+        if warnings:
+            st.warning(
+                "Estos avisos no bloquean la importación, pero conviene revisarlos."
+            )
+            st.dataframe(warnings, hide_index=True, width="stretch")
+        if changes:
+            st.write("Cambios que se aplicarán")
+            st.dataframe(changes, hide_index=True, width="stretch")
+        elif not errors:
+            st.info("El Excel no contiene cambios respecto a la exportación.")
+
+        can_apply = bool(preview.get("can_apply"))
+        consolidate_after_import = st.checkbox(
+            "Consolidar después de importar las fichas modificadas que estén en borrador",
+            value=False,
+            disabled=not can_apply,
+            key="external_review_consolidate",
+        )
+        st.caption(
+            "Si no marcas esta opción, cada ficha conserva su estado actual. "
+            "Las fichas consolidadas pueden corregirse mediante esta importación "
+            "explícita y continúan consolidadas."
+        )
+        confirm_import = st.checkbox(
+            "He revisado la lista completa y confirmo estos cambios",
+            disabled=not can_apply,
+            key="external_review_confirm",
+        )
+        if st.button(
+            "Aplicar cambios del Excel",
+            type="primary",
+            disabled=not can_apply or not confirm_import,
+            key="external_review_apply",
+        ):
+            import_bytes = st.session_state.get("external_review_import_bytes")
+            if not isinstance(import_bytes, (bytes, bytearray)):
+                st.error("Vuelve a analizar el archivo antes de importarlo.")
+            else:
+                try:
+                    result = api_post(
+                        "/core-books/review-workbook/apply",
+                        json={
+                            "content_base64": base64.b64encode(
+                                bytes(import_bytes)
+                            ).decode("ascii"),
+                            "workbook_sha256": preview.get("workbook_sha256"),
+                            "confirm": True,
+                            "consolidate_after_import": bool(consolidate_after_import),
+                        },
+                        timeout=LONG_TIMEOUT_SECONDS,
+                    )
+                except Exception as exc:
+                    st.error(f"No se pudieron aplicar los cambios: {exc}")
+                else:
+                    if result.get("applied"):
+                        st.success(
+                            "Importación completada: "
+                            f"{int(result.get('applied_books') or 0)} fichas "
+                            "actualizadas y descripciones regeneradas."
+                        )
+                        st.session_state["external_review_preview"] = result
+                    else:
+                        st.error(
+                            "La importación no se aplicó porque la validación "
+                            "detectó cambios o errores nuevos."
+                        )
+                        st.session_state["external_review_preview"] = result
+
+st.divider()
+st.subheader("Instantáneas de la base de datos")
 
 
 try:

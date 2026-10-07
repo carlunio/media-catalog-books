@@ -1,10 +1,13 @@
+import base64
 import importlib
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import duckdb
 import pillow_heif
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from PIL import Image
 
 EXPORT_COLUMNS = [
@@ -664,3 +667,220 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
         imported.json()["migration"]["schema_version"] == "0004_optional_cover_branch"
     )
     assert imported.json()["restart_required"] is True
+
+
+def _review_sheet_columns(sheet) -> dict[str, int]:
+    return {
+        str(sheet.cell(row=1, column=column).value): column
+        for column in range(1, sheet.max_column + 1)
+    }
+
+
+def _seed_review_book(
+    database_path: Path,
+    *,
+    book_id: str = "01A0001",
+    form_status: str = "draft",
+) -> None:
+    with duckdb.connect(str(database_path)) as con:
+        con.execute(
+            """
+            INSERT INTO book_items (id, block, module, seq, form_status)
+            VALUES (?, 'A', '01', '0001', ?)
+            """,
+            [book_id, form_status],
+        )
+        con.execute(
+            """
+            INSERT INTO books (
+                id, titulo, autor, categoria, estado_stock, estado_carga,
+                tipo_articulo, precio, cantidad, palabras_clave, descripcion
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                book_id,
+                "El árbol",
+                "Pérez, Ana",
+                "Ensayo",
+                "En venta",
+                "Para subir",
+                "Libros",
+                10.0,
+                1,
+                "árbol",
+                "Descripción anterior.",
+            ],
+        )
+
+
+def test_review_workbook_round_trip_is_unicode_and_regenerates_description(
+    tmp_path, monkeypatch
+):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    _seed_review_book(tmp_path / "books.duckdb")
+
+    exported = client.get(
+        "/core-books/review-workbook",
+        params={"block": "A", "module": "01", "form_status": "draft"},
+    )
+    assert exported.status_code == 200, exported.text
+    assert exported.content.startswith(b"PK")
+    assert exported.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    workbook = load_workbook(BytesIO(exported.content))
+    assert workbook["_Original"].sheet_state == "veryHidden"
+    assert workbook["_Listas"].sheet_state == "veryHidden"
+    assert workbook["_Metadatos"].sheet_state == "veryHidden"
+
+    sheet = workbook["Fichas"]
+    columns = _review_sheet_columns(sheet)
+    assert sheet.cell(row=2, column=columns["Ref. del artículo"]).number_format == "@"
+    assert sheet.cell(row=2, column=columns["Ref. del artículo"]).protection.locked
+    assert not sheet.cell(row=2, column=columns["Título"]).protection.locked
+    assert sheet.cell(row=1, column=columns["Categoría"]).fill.fgColor.rgb.endswith(
+        "A4B8D3"
+    )
+
+    validations = {
+        validation.formula1: bool(validation.showErrorMessage)
+        for validation in sheet.data_validations.dataValidation
+    }
+    assert validations["=opciones_estado_stock"] is True
+    assert validations["=opciones_categoria"] is False
+    assert validations["=opciones_genero"] is False
+
+    sheet.cell(row=2, column=columns["Título"], value="Árbol, ñandú y 東京")
+    sheet.cell(row=2, column=columns["Autor"], value="Ana Pérez")
+    sheet.cell(row=2, column=columns["Categoría"], value="Bibliofilia")
+    sheet.cell(row=2, column=columns["Precio"], value="12,50")
+
+    edited_buffer = BytesIO()
+    workbook.save(edited_buffer)
+    encoded = base64.b64encode(edited_buffer.getvalue()).decode("ascii")
+
+    preview = client.post(
+        "/core-books/review-workbook/preview",
+        json={"content_base64": encoded},
+    )
+    assert preview.status_code == 200, preview.text
+    report = preview.json()
+    assert report["valid"] is True
+    assert report["can_apply"] is True
+    assert report["changed_books"] == 1
+    assert any(row["campo"] == "Descripción" for row in report["changes"])
+    assert any(row["campo"] == "Autor" for row in report["warnings"])
+
+    unconfirmed = client.post(
+        "/core-books/review-workbook/apply",
+        json={
+            "content_base64": encoded,
+            "workbook_sha256": report["workbook_sha256"],
+            "confirm": False,
+        },
+    )
+    assert unconfirmed.status_code == 400
+
+    applied = client.post(
+        "/core-books/review-workbook/apply",
+        json={
+            "content_base64": encoded,
+            "workbook_sha256": report["workbook_sha256"],
+            "confirm": True,
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["applied"] is True
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        saved = con.execute("""
+            SELECT b.titulo, b.autor, b.categoria, b.precio, b.descripcion,
+                   bi.form_status
+            FROM books AS b
+            JOIN book_items AS bi ON bi.id = b.id
+            WHERE b.id = '01A0001'
+            """).fetchone()
+
+    assert saved[0] == "Árbol, ñandú y 東京"
+    assert saved[1] == "Ana Pérez"
+    assert saved[2] == "Bibliofilia"
+    assert float(saved[3]) == 12.5
+    assert "Bibliofilia" in saved[4]
+    assert saved[5] == "draft"
+
+
+def test_review_workbook_blocks_invalid_closed_values_and_preserves_consolidation(
+    tmp_path, monkeypatch
+):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    _seed_review_book(
+        tmp_path / "books.duckdb",
+        form_status="consolidated",
+    )
+
+    exported = client.get(
+        "/core-books/review-workbook",
+        params={
+            "block": "A",
+            "module": "01",
+            "form_status": "consolidated",
+        },
+    )
+    workbook = load_workbook(BytesIO(exported.content))
+    sheet = workbook["Fichas"]
+    columns = _review_sheet_columns(sheet)
+    sheet.cell(row=2, column=columns["Estado de stock"], value="Inventado")
+    sheet.cell(row=2, column=columns["Precio"], value="doce euros")
+
+    invalid_buffer = BytesIO()
+    workbook.save(invalid_buffer)
+    invalid_encoded = base64.b64encode(invalid_buffer.getvalue()).decode("ascii")
+    invalid = client.post(
+        "/core-books/review-workbook/preview",
+        json={"content_base64": invalid_encoded},
+    ).json()
+    assert invalid["valid"] is False
+    assert invalid["can_apply"] is False
+    assert any(
+        row["campo"] == "Estado de stock" and "lista cerrada" in row["mensaje"]
+        for row in invalid["errors"]
+    )
+    assert any(
+        row["campo"] == "Precio" and "número decimal" in row["mensaje"]
+        for row in invalid["errors"]
+    )
+
+    sheet.cell(row=2, column=columns["Estado de stock"], value="Vendido")
+    sheet.cell(row=2, column=columns["Precio"], value=10.0)
+    valid_buffer = BytesIO()
+    workbook.save(valid_buffer)
+    valid_encoded = base64.b64encode(valid_buffer.getvalue()).decode("ascii")
+    valid = client.post(
+        "/core-books/review-workbook/preview",
+        json={"content_base64": valid_encoded},
+    ).json()
+    assert valid["valid"] is True
+
+    applied = client.post(
+        "/core-books/review-workbook/apply",
+        json={
+            "content_base64": valid_encoded,
+            "workbook_sha256": valid["workbook_sha256"],
+            "confirm": True,
+            "consolidate_after_import": False,
+        },
+    ).json()
+    assert applied["applied"] is True
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        saved = con.execute("""
+            SELECT b.estado_stock, bi.form_status
+            FROM books AS b
+            JOIN book_items AS bi ON bi.id = b.id
+            WHERE b.id = '01A0001'
+            """).fetchone()
+    assert saved == ("Vendido", "consolidated")

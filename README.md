@@ -72,6 +72,12 @@ El contrato de las API bibliográficas, la separación entre obra y edición y l
 selección de portadas están documentados en
 [`docs/METADATA_AND_COVERS.md`](docs/METADATA_AND_COVERS.md).
 
+La página **Datos** permite exportar las fichas de un módulo a un Excel
+Unicode, revisarlas fuera de la aplicación e importar sus cambios después de
+validarlos y confirmarlos. El procedimiento, los desplegables y las reglas de
+formato están documentados en
+[`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md).
+
 ## Estructura de datos de entrada/salida
 
 Estructura requerida en `data/input`:

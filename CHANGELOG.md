@@ -15,6 +15,13 @@
   `docs/METADATA_AND_COVERS.md`.
 - Instrucciones verificadas para crear y restringir una clave de Google Books,
   registrar el uso de las API de Open Library y configurar ambas integraciones.
+- Revisión externa de fichas desde la página Datos mediante Excel Unicode
+  (`.xlsx`), con filtros por módulo y estado, cabeceras y colores del formulario,
+  desplegables cerrados o ampliables según el campo y guía operativa propia.
+- Vista previa de todos los cambios antes de importar, validación de formatos y
+  conflictos, confirmación explícita, guardado atómico y regeneración automática
+  de la descripción. Las fichas pueden conservar su estado o consolidarse tras
+  la importación.
 
 ### Cambiado
 

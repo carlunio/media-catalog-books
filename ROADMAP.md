@@ -55,6 +55,9 @@ herramientas de
   búsqueda de Google.
 - [x] `P1` Barrer las portadas ausentes por archivo físico y priorizar las
   variantes `large` y `medium` de Open Library y Google.
+- [x] `P0` Añadir la revisión externa de fichas mediante Excel Unicode, con
+  listas cerradas y ampliables, validación previa, confirmación, control de
+  conflictos e importación atómica.
 
 ## Contratos preservados
 

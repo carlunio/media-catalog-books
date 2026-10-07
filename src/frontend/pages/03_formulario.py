@@ -5,6 +5,13 @@ import requests
 import streamlit as st
 
 try:
+    from src.catalog_form_fields import (
+        IMPORTANT_FIELDS,
+        READ_ONLY_FIELDS,
+        SELECTABLE_FIELDS,
+        SELECTABLE_WITH_CUSTOM_VALUE_FIELDS,
+        label_class as field_label_class,
+    )
     from src.frontend.utils import (
         api_get,
         api_post,
@@ -17,6 +24,13 @@ try:
         show_backend_status,
     )
 except ModuleNotFoundError:  # pragma: no cover
+    from catalog_form_fields import (
+        IMPORTANT_FIELDS,
+        READ_ONLY_FIELDS,
+        SELECTABLE_FIELDS,
+        SELECTABLE_WITH_CUSTOM_VALUE_FIELDS,
+        label_class as field_label_class,
+    )
     from frontend.utils import (
         api_get,
         api_post,
@@ -316,120 +330,13 @@ def _field_options(field: str, current: str) -> list[str]:
     return options
 
 
-READ_ONLY_FIELDS: set[str] = {
-    "titulo_corto",
-    "subtitulo",
-    "titulo_completo",
-}
-
-SELECTABLE_FIELDS: set[str] = {
-    "tipo_articulo",
-    "estado_stock",
-    "estado_carga",
-    "edicion",
-    "numero_impresion",
-    "ilustraciones",
-    "categoria",
-    "genero",
-    "encuadernacion",
-    "estado_conservacion",
-    "estado_cubierta",
-    "dedicatorias",
-    "plantilla_envio",
-    "catalogo_1",
-    "catalogo_2",
-    "catalogo_3",
-}
-
-SELECTABLE_WITH_CUSTOM_VALUE_FIELDS: set[str] = {
-    "categoria",
-    "genero",
-}
-
-SALMON_FIELDS: set[str] = {
-    "edicion",
-    "numero_impresion",
-    "coleccion",
-    "numero_coleccion",
-    "obra_completa",
-    "volumen",
-}
-
-IMPORTANT_FIELDS: set[str] = {
-    "edicion",
-    "coleccion",
-    "numero_coleccion",
-    "obra_completa",
-    "volumen",
-    "detalle_encuadernacion",
-    "desperfectos",
-    "url_imagenes",
-    "plantilla_envio",
-    "precio",
-}
-
-
-def _label_class(field: str) -> str:
-    if field in READ_ONLY_FIELDS:
-        return "lbl-orange-soft"
-    if field in SALMON_FIELDS:
-        return "lbl-salmon"
-    if field in {"tipo_articulo", "categoria", "genero", "palabras_clave"}:
-        return "lbl-blue"
-    if field in {
-        "estado_stock",
-        "estado_carga",
-        "plantilla_envio",
-        "catalogo_1",
-        "catalogo_2",
-        "catalogo_3",
-        "cantidad",
-        "precio",
-        "url_imagenes",
-    }:
-        return "lbl-purple"
-    if field in {"titulo", "subtitulo"}:
-        return "lbl-orange"
-    if field in {
-        "titulo_corto",
-        "titulo_completo",
-        "obra_completa",
-        "volumen",
-        "coleccion",
-        "numero_coleccion",
-    }:
-        return "lbl-beige"
-    if field in {
-        "autor",
-        "pais_autor",
-        "editorial",
-        "pais_publicacion",
-        "anio",
-        "isbn",
-        "idioma",
-    }:
-        return "lbl-green"
-    if field in {
-        "encuadernacion",
-        "detalle_encuadernacion",
-        "estado_conservacion",
-        "estado_cubierta",
-        "desperfectos",
-        "dedicatorias",
-    }:
-        return "lbl-yellow"
-    if field in {"paginas", "peso", "alto", "ancho", "fondo"}:
-        return "lbl-cyan"
-    return "lbl-steel"
-
-
 def _render_field(label: str, field: str, *, left_col, right_col) -> None:
     current_value = str(
         st.session_state.get(_input_key(selected_id, field), "")
     ).strip()
     important_class = " is-important" if field in IMPORTANT_FIELDS else ""
     left_col.markdown(
-        f"<div class='access-label {_label_class(field)}{important_class}'>{label}</div>",
+        f"<div class='access-label {field_label_class(field)}{important_class}'>{label}</div>",
         unsafe_allow_html=True,
     )
     key = _input_key(selected_id, field)
@@ -507,7 +414,7 @@ def _render_stacked_field(
     label_class: str | None = None,
 ) -> None:
     important_class = " is-important" if field in IMPORTANT_FIELDS else ""
-    resolved_class = label_class or _label_class(field)
+    resolved_class = label_class or field_label_class(field)
     container.markdown(
         f"<div class='access-label {resolved_class}{important_class}'>{label}</div>",
         unsafe_allow_html=True,

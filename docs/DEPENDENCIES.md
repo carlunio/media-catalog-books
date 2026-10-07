@@ -65,6 +65,10 @@ El archivo de bloqueo se genera con `pip-tools`, sumas de comprobación, finales
 de línea LF y sin rutas ni índices locales. `.gitattributes` conserva LF también
 en las copias de trabajo de Windows. No debe editarse a mano.
 
+La generación y lectura de los libros de revisión `.xlsx` usa `openpyxl`. El
+formato OOXML conserva Unicode y no comparte la codificación `windows-1252` del
+TXT específico para AbeBooks.
+
 ## Validación
 
 La integración continua instala exclusivamente `requirements.lock`, comprueba
