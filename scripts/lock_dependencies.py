@@ -63,7 +63,7 @@ def _check_lock() -> int:
             )
             return 1
 
-    print("requirements.lock esta sincronizado con pyproject.toml.")
+    print("requirements.lock está sincronizado con pyproject.toml.")
     return 0
 
 
@@ -79,7 +79,7 @@ def main() -> int:
     parser.add_argument(
         "--upgrade",
         action="store_true",
-        help="Actualiza todas las dependencias a las versiones compatibles mas recientes.",
+        help="Actualiza todas las dependencias a las versiones compatibles más recientes.",
     )
     args = parser.parse_args()
 

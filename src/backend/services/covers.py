@@ -19,13 +19,21 @@ def _cover_candidates(metadata: dict[str, Any]) -> list[str]:
     google = metadata.get("google") if isinstance(metadata.get("google"), dict) else {}
     isbndb = metadata.get("isbndb") if isinstance(metadata.get("isbndb"), dict) else {}
 
-    cover = (
-        open_library.get("cover") if isinstance(open_library.get("cover"), dict) else {}
+    open_library_edition = (
+        open_library.get("edition")
+        if isinstance(open_library.get("edition"), dict)
+        else {}
     )
-    for key in ("large", "medium", "small"):
-        value = cover.get(key)
-        if isinstance(value, str) and value.strip():
-            urls.append(value.strip())
+    for open_library_payload in (open_library_edition, open_library):
+        cover = (
+            open_library_payload.get("cover")
+            if isinstance(open_library_payload.get("cover"), dict)
+            else {}
+        )
+        for key in ("large", "medium", "small"):
+            value = cover.get(key)
+            if isinstance(value, str) and value.strip():
+                urls.append(value.strip())
 
     image_links = (
         google.get("imageLinks") if isinstance(google.get("imageLinks"), dict) else {}
@@ -39,6 +47,50 @@ def _cover_candidates(metadata: dict[str, Any]) -> list[str]:
     image = isbndb_book.get("image")
     if isinstance(image, str) and image.strip():
         urls.append(image.strip())
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        key = url.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(url)
+    return unique
+
+
+def _preferred_cover_candidates(metadata: dict[str, Any]) -> list[str]:
+    """Return large/medium Open Library and Google covers in provider order."""
+    urls: list[str] = []
+
+    open_library = (
+        metadata.get("open_library")
+        if isinstance(metadata.get("open_library"), dict)
+        else {}
+    )
+    open_library_edition = (
+        open_library.get("edition")
+        if isinstance(open_library.get("edition"), dict)
+        else {}
+    )
+    for open_library_payload in (open_library_edition, open_library):
+        cover = (
+            open_library_payload.get("cover")
+            if isinstance(open_library_payload.get("cover"), dict)
+            else {}
+        )
+        for key in ("large", "medium"):
+            value = cover.get(key)
+            if isinstance(value, str) and value.strip():
+                urls.append(value.strip())
+
+    google = metadata.get("google") if isinstance(metadata.get("google"), dict) else {}
+    image_links = (
+        google.get("imageLinks") if isinstance(google.get("imageLinks"), dict) else {}
+    )
+    for key in ("large", "medium"):
+        value = image_links.get(key)
+        if isinstance(value, str) and value.strip():
+            urls.append(value.strip())
 
     unique: list[str] = []
     seen: set[str] = set()
@@ -82,6 +134,15 @@ def _output_dir_for_book(book_id: str) -> Path:
     return DEFAULT_COVERS_OUTPUT_DIR / block_value / module_value
 
 
+def existing_cover_file(book_id: str) -> Path | None:
+    output_dir = _output_dir_for_book(book_id)
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        candidate = output_dir / f"{book_id}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def run_one(
     book_id: str, *, overwrite: bool = False, timeout: float = REQUEST_TIMEOUT_SECONDS
 ) -> dict[str, Any]:
@@ -89,25 +150,29 @@ def run_one(
     if book is None:
         return {"id": book_id, "status": "error", "error": "Book not found"}
 
-    existing_status = str(book.get("cover_status") or "").strip().lower()
     existing_cover_path = str(book.get("cover_path") or "").strip()
-    existing_cover_exists = (
-        Path(existing_cover_path).exists() if existing_cover_path else False
+    existing_file = (
+        Path(existing_cover_path)
+        if existing_cover_path and Path(existing_cover_path).is_file()
+        else existing_cover_file(book_id)
     )
-    if (
-        existing_status == "downloaded"
-        and existing_cover_path
-        and existing_cover_exists
-        and not overwrite
-    ):
+    if existing_file is not None and not overwrite:
+        books.update_cover(
+            book_id,
+            cover_path=str(existing_file.resolve()),
+            status="downloaded",
+            error=None,
+        )
         return {
             "id": book_id,
             "status": "skipped",
             "reason": "cover already downloaded",
+            "cover_path": str(existing_file.resolve()),
         }
 
     metadata = book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
     urls = _cover_candidates(metadata)
+    preferred_urls = _preferred_cover_candidates(metadata)
 
     if not urls:
         books.update_cover(
@@ -124,7 +189,9 @@ def run_one(
 
     tmp_downloads: list[Path] = []
     errors: list[str] = []
-    for idx, url in enumerate(urls):
+
+    primary_urls = preferred_urls or urls
+    for idx, url in enumerate(primary_urls):
         try:
             tmp_path = _download_one(
                 url, output_dir / f"{book_id}__candidate_{idx:02d}", timeout=timeout
@@ -132,6 +199,22 @@ def run_one(
             tmp_downloads.append(tmp_path)
         except Exception as exc:
             errors.append(f"{url}: {exc}")
+
+    # A declared large/medium URL can still be broken. Only when every preferred
+    # download fails do we fall back to the remaining candidates.
+    if preferred_urls and not tmp_downloads:
+        preferred_set = {url.lower() for url in preferred_urls}
+        fallback_urls = [url for url in urls if url.lower() not in preferred_set]
+        for idx, url in enumerate(fallback_urls, start=len(primary_urls)):
+            try:
+                tmp_path = _download_one(
+                    url,
+                    output_dir / f"{book_id}__candidate_{idx:02d}",
+                    timeout=timeout,
+                )
+                tmp_downloads.append(tmp_path)
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
 
     if not tmp_downloads:
         books.update_cover(
@@ -147,8 +230,10 @@ def run_one(
     )
     final_path = output_dir / f"{book_id}{best.suffix.lower()}"
 
-    if final_path.exists():
-        final_path.unlink()
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        existing = output_dir / f"{book_id}{suffix}"
+        if existing.exists():
+            existing.unlink()
     best.rename(final_path)
 
     for tmp in tmp_downloads:

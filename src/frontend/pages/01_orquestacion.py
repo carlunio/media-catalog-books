@@ -78,13 +78,15 @@ with st.expander("Definición del grafo", expanded=False):
     except Exception as exc:
         st.error(f"No se pudo cargar /workflow/graph: {exc}")
 
-st.subheader("Ejecucion del pipeline")
+st.subheader("Ejecución del flujo de trabajo")
 
 STAGE_INDEX = {stage_name: idx for idx, stage_name in enumerate(WORKFLOW_STAGES)}
 
 col1, col2, col3, col4 = st.columns([1.2, 1, 1, 1])
 with col1:
-    selected_id = st.text_input("Book ID (opcional)", value="", placeholder="03B0001")
+    selected_id = st.text_input(
+        "ID del libro (opcional)", value="", placeholder="03B0001"
+    )
 with col2:
     start_stage_key = "orq_start_stage"
     if start_stage_key not in st.session_state:
@@ -105,10 +107,22 @@ with col3:
     stop_after = st.selectbox("Parar en", stop_options, key=stop_after_key)
     st.session_state[prev_start_key] = start_stage
 with col4:
-    st.caption("El límite de lote depende de la etapa y overwrite")
+    st.caption("El límite del lote se calcula con los libros elegibles")
 
-overwrite = st.checkbox("Sobrescribir etapas ya completas", value=False)
-max_attempts = st.number_input("Reintentos maximos", min_value=0, max_value=20, value=2)
+overwrite = st.checkbox(
+    "Sobrescribir etapas ya completas",
+    value=False,
+    help=(
+        "Permite repetir la etapa elegida en libros que ya han avanzado más. "
+        "Los libros con el flujo completado, consolidados, en revisión o en ejecución siempre "
+        "quedan excluidos."
+    ),
+)
+max_attempts = st.number_input("Reintentos máximos", min_value=0, max_value=20, value=2)
+st.caption(
+    "El lote no tiene un tiempo de espera global. Cada llamada externa tiene su propio "
+    "límite y el contador se reinicia para el siguiente libro."
+)
 
 start_idx = STAGE_INDEX.get(start_stage, 0)
 stop_idx = (
@@ -120,47 +134,51 @@ if stop_idx < start_idx:
     stop_idx = start_idx
 
 ocr_in_flow = STAGE_INDEX["ocr"] >= start_idx and STAGE_INDEX["ocr"] <= stop_idx
+metadata_in_flow = (
+    STAGE_INDEX["metadata"] >= start_idx and STAGE_INDEX["metadata"] <= stop_idx
+)
 catalog_in_flow = (
     STAGE_INDEX["catalog"] >= start_idx and STAGE_INDEX["catalog"] <= stop_idx
 )
 
 eligible_limit: int | None = None
-if not overwrite:
-    try:
-        eligible_payload = api_get(
-            "/workflow/eligible",
-            params={
-                "start_stage": start_stage,
-                "overwrite": "false",
-                **scope_params(scope_block, scope_module),
-            },
-            timeout=10.0,
-        )
-        eligible_limit = int(eligible_payload.get("eligible", 0))
-    except Exception as exc:
-        st.warning(f"No se pudo calcular elegibles para el lote: {exc}")
-        eligible_limit = None
+try:
+    eligible_payload = api_get(
+        "/workflow/eligible",
+        params={
+            "start_stage": start_stage,
+            "overwrite": str(bool(overwrite)).lower(),
+            **scope_params(scope_block, scope_module),
+        },
+        timeout=10.0,
+    )
+    eligible_limit = int(eligible_payload.get("eligible", 0))
+except Exception as exc:
+    st.warning(f"No se pudo calcular elegibles para el lote: {exc}")
+    eligible_limit = None
 
-if overwrite:
+if eligible_limit is None:
     limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
+elif eligible_limit <= 0:
+    overwrite_text = " con sobrescritura" if overwrite else ""
+    st.info(
+        f"No hay elementos elegibles para '{start_stage}'{overwrite_text} "
+        "en el módulo seleccionado. Si el rango incluye metadatos y mantienes "
+        "activada la descarga automática, aún puedes ejecutar el barrido de "
+        "portadas pendientes."
+    )
+    limit = 0
 else:
-    if eligible_limit is None:
-        limit = st.number_input("Lote", min_value=1, max_value=5000, value=20)
-    elif eligible_limit <= 0:
-        st.info(
-            f"No hay items elegibles en etapa '{start_stage}' para el módulo seleccionado."
-        )
-        limit = 0
-    else:
-        st.caption(
-            f"Elegibles exactos para '{start_stage}' sin overwrite: {eligible_limit}"
-        )
-        limit = st.number_input(
-            "Lote",
-            min_value=1,
-            max_value=int(eligible_limit),
-            value=min(20, int(eligible_limit)),
-        )
+    eligibility_text = (
+        "incluyendo etapas posteriores" if overwrite else "en la etapa exacta"
+    )
+    st.caption(f"Elegibles para '{start_stage}' ({eligibility_text}): {eligible_limit}")
+    limit = st.number_input(
+        "Lote",
+        min_value=1,
+        max_value=int(eligible_limit),
+        value=min(20, int(eligible_limit)),
+    )
 
 col_provider, col_model = st.columns([1, 2])
 with col_provider:
@@ -170,7 +188,7 @@ with col_provider:
         ocr_provider_index = ocr_provider_options.index(OCR_PROVIDER_DEFAULT)
     seed_widget_once("orq_ocr_provider", ocr_provider_options[ocr_provider_index])
     ocr_provider = st.selectbox(
-        "OCR provider",
+        "Proveedor de OCR",
         ocr_provider_options,
         key="orq_ocr_provider",
         disabled=not ocr_in_flow,
@@ -204,13 +222,27 @@ with col_model:
     ocr_resize_to_1800 = st.checkbox(
         "Reducir imagen a 1800 px (solo para glm-ocr)",
         key="orq_ocr_resize_to_1800",
-        help="Si esta activo y el modelo OCR empieza por 'glm-ocr', se redimensiona la imagen al lado maximo 1800.",
+        help="Si está activo y el modelo OCR empieza por 'glm-ocr', la imagen se reduce a un lado máximo de 1800 px.",
         disabled=not ocr_in_flow,
     )
     if not ocr_in_flow:
         st.caption("OCR fuera del rango seleccionado; configuración desactivada.")
 
-st.caption("Configuración de catalogación automatica")
+download_cover_after_metadata = st.checkbox(
+    "Descargar portadas al obtener metadatos",
+    value=True,
+    help=(
+        "Después de consultar las API, descarga la portada si ese ID todavía "
+        "no tiene una. Un fallo de portada no detiene el flujo de trabajo."
+    ),
+    disabled=not metadata_in_flow,
+)
+if not metadata_in_flow:
+    st.caption(
+        "Metadatos fuera del rango seleccionado; descarga automática desactivada."
+    )
+
+st.caption("Configuración de catalogación automática")
 cat_col_a, cat_col_b = st.columns([1, 2])
 with cat_col_a:
     catalog_provider_options = ["openai", "ollama"]
@@ -223,7 +255,7 @@ with cat_col_a:
         "orq_catalog_provider", catalog_provider_options[catalog_provider_index]
     )
     catalog_provider = st.selectbox(
-        "Provider catalogo",
+        "Proveedor del catálogo",
         catalog_provider_options,
         key="orq_catalog_provider",
         disabled=not catalog_in_flow,
@@ -231,7 +263,7 @@ with cat_col_a:
 with cat_col_b:
     if catalog_provider == "ollama":
         catalog_model = render_ollama_model_selector(
-            label="Modelo catalogo",
+            label="Modelo del catálogo",
             key="orq_catalog_model_ollama",
             installed_models=ollama_models,
             default_model=CATALOG_OLLAMA_MODEL_DEFAULT,
@@ -241,7 +273,7 @@ with cat_col_b:
     else:
         seed_widget_once("orq_catalog_model_openai", CATALOG_OPENAI_MODEL_DEFAULT)
         catalog_model = st.text_input(
-            "Modelo catalogo",
+            "Modelo del catálogo",
             placeholder=CATALOG_OPENAI_MODEL_DEFAULT,
             key="orq_catalog_model_openai",
             disabled=not catalog_in_flow,
@@ -253,24 +285,26 @@ if ocr_in_flow:
     st.caption(f"OCR efectivo (si no tocas nada): `{ocr_provider}` / `{ocr_model}`")
 if catalog_in_flow:
     st.caption(
-        f"Catalog efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`"
+        f"Catálogo efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`"
     )
 
-if st.button("Ejecutar workflow", type="primary"):
-    if not overwrite and int(limit) <= 0:
-        st.warning(
-            "No hay items elegibles para ejecutar con esa etapa inicial y overwrite desactivado."
-        )
+if st.button("Ejecutar flujo", type="primary"):
+    cover_sweep_requested = metadata_in_flow and bool(download_cover_after_metadata)
+    if int(limit) <= 0 and not cover_sweep_requested:
+        st.warning("No hay elementos elegibles para ejecutar con esa configuración.")
         st.stop()
 
     payload = {
         "book_id": selected_id.strip() or None,
         "block": scope_block,
         "module": scope_module,
-        "limit": int(limit),
+        "limit": max(1, int(limit)),
         "start_stage": start_stage,
         "stop_after": None if stop_after == "(sin límite)" else stop_after,
         "overwrite": bool(overwrite),
+        "download_cover_after_metadata": (
+            bool(download_cover_after_metadata) if metadata_in_flow else False
+        ),
         "max_attempts": int(max_attempts),
         "ocr_provider": ocr_provider,
         "ocr_model": (ocr_model.strip() or None) if ocr_in_flow else None,
@@ -279,19 +313,106 @@ if st.button("Ejecutar workflow", type="primary"):
         "catalog_model": (catalog_model.strip() or None) if catalog_in_flow else None,
     }
     try:
-        result = api_post("/workflow/run", json=payload, timeout=1800.0)
+        result = api_post("/workflow/run", json=payload, timeout=None)
         st.success(
             f"Procesados {result.get('processed', 0)} de {result.get('requested', 0)}"
         )
         items = result.get("items", [])
         if items:
             st.dataframe(pd.DataFrame(items), width="stretch", hide_index=True)
+        cover_sweep = result.get("cover_sweep")
+        if isinstance(cover_sweep, dict):
+            st.info(
+                "Barrido de portadas del módulo: "
+                f"{cover_sweep.get('processed', 0)} pendientes procesadas."
+            )
+            cover_items = cover_sweep.get("items", [])
+            if cover_items:
+                st.dataframe(
+                    pd.DataFrame(cover_items),
+                    width="stretch",
+                    hide_index=True,
+                )
     except Exception as exc:
-        st.error(f"Error ejecutando workflow: {exc}")
+        st.error(f"Error al ejecutar el flujo: {exc}")
 
-st.subheader("Snapshot operativo")
+st.divider()
+st.subheader("Descarga de portadas")
+st.caption(
+    "Rama opcional basada en las imágenes de las API. Se puede ejecutar en "
+    "cualquier momento, también después de consolidar la ficha, y no modifica "
+    "su estado ni bloquea los pasos del flujo de trabajo."
+)
 
-if st.button("Refrescar snapshot"):
+try:
+    cover_eligible_payload = api_get(
+        "/workflow/eligible",
+        params={
+            "start_stage": "cover",
+            "overwrite": "false",
+            **scope_params(scope_block, scope_module),
+        },
+        timeout=10.0,
+    )
+    cover_eligible = int(cover_eligible_payload.get("eligible", 0))
+    st.caption(f"Portadas pendientes en el módulo: {cover_eligible}")
+except Exception as exc:
+    st.warning(f"No se pudo calcular las portadas pendientes: {exc}")
+
+with st.form("orq_cover_download_form", border=True):
+    cover_id_col, cover_limit_col = st.columns([2, 1])
+    with cover_id_col:
+        cover_book_id = st.text_input(
+            "ID del libro (opcional)",
+            placeholder="03B0001",
+            key="orq_cover_book_id",
+        )
+    with cover_limit_col:
+        cover_limit = st.number_input(
+            "Lote de portadas",
+            min_value=1,
+            max_value=5000,
+            value=20,
+            key="orq_cover_limit",
+        )
+    cover_overwrite = st.checkbox(
+        "Volver a descargar portadas ya procesadas",
+        value=False,
+        key="orq_cover_overwrite",
+    )
+    download_covers = st.form_submit_button(
+        "Descargar portadas",
+        icon=":material/download:",
+        type="primary",
+    )
+
+if download_covers:
+    try:
+        cover_result = api_post(
+            "/cover/download",
+            json={
+                "book_id": cover_book_id.strip() or None,
+                "block": scope_block,
+                "module": scope_module,
+                "limit": int(cover_limit),
+                "overwrite": bool(cover_overwrite),
+            },
+            timeout=None,
+        )
+        st.success(
+            "Rama de portadas completada: "
+            f"{cover_result.get('processed', 0)} de "
+            f"{cover_result.get('requested', 0)} procesadas."
+        )
+        cover_items = cover_result.get("items", [])
+        if cover_items:
+            st.dataframe(pd.DataFrame(cover_items), width="stretch", hide_index=True)
+    except Exception as exc:
+        st.error(f"Error descargando portadas: {exc}")
+
+st.subheader("Estado operativo")
+
+if st.button("Actualizar estado"):
     st.cache_data.clear()
 
 try:
@@ -302,7 +423,7 @@ try:
     }
     snapshot = api_get("/workflow/snapshot", params=params, timeout=12.0)
 except Exception as exc:
-    st.error(f"No se pudo cargar snapshot: {exc}")
+    st.error(f"No se pudo cargar el estado: {exc}")
     st.stop()
 
 stage_counts = snapshot.get("stage_counts", {})
@@ -312,27 +433,27 @@ running_nodes = snapshot.get("running_nodes", {})
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("OCR", int(stage_counts.get("ocr", 0)))
-m2.metric("Metadata", int(stage_counts.get("metadata", 0)))
-m3.metric("Catalog", int(stage_counts.get("catalog", 0)))
-m4.metric("Cover", int(stage_counts.get("cover", 0)))
+m2.metric("Metadatos", int(stage_counts.get("metadata", 0)))
+m3.metric("Catálogo", int(stage_counts.get("catalog", 0)))
+m4.metric("Portadas", int(stage_counts.get("cover", 0)))
 
 m5, m6, m7, m8 = st.columns(4)
-m5.metric("Review", int(stage_counts.get("review", 0)))
-m6.metric("Done", int(stage_counts.get("done", 0)))
-m7.metric("Running", int(stage_counts.get("running", 0)))
-m8.metric("Unknown", int(stage_counts.get("unknown", 0)))
+m5.metric("Revisión", int(stage_counts.get("review", 0)))
+m6.metric("Completados", int(stage_counts.get("done", 0)))
+m7.metric("En ejecución", int(stage_counts.get("running", 0)))
+m8.metric("Desconocidos", int(stage_counts.get("unknown", 0)))
 
 with st.expander("Detalle de estados", expanded=False):
-    st.write("Workflow status counts")
+    st.write("Recuento por estado del flujo")
     st.dataframe(
         pd.DataFrame([workflow_status_counts]), width="stretch", hide_index=True
     )
-    st.write("Form status counts")
+    st.write("Recuento por estado del formulario")
     st.dataframe(pd.DataFrame([form_status_counts]), width="stretch", hide_index=True)
-    st.write("Running nodes")
+    st.write("Nodos en ejecución")
     st.dataframe(pd.DataFrame([running_nodes]), width="stretch", hide_index=True)
 
-st.subheader("Items en running")
+st.subheader("Elementos en ejecución")
 running_total = int(stage_counts.get("running", 0))
 if running_total > 0:
     try:
@@ -372,20 +493,20 @@ if running_total > 0:
                         "id": str(row.get("id") or ""),
                         "nodo": node or "(sin nodo)",
                         "etapa": stage or "(sin etapa)",
-                        "accion": workflow_action
-                        or (f"Ejecutando {node}" if node else "Ejecutando workflow"),
+                        "acción": workflow_action
+                        or (f"Ejecutando {node}" if node else "Ejecutando flujo"),
                         "llm": llm_value or "-",
-                        "attempt": int(row.get("workflow_attempt") or 0),
+                        "intento": int(row.get("workflow_attempt") or 0),
                         "updated_at": row.get("updated_at"),
                     }
                 )
             st.dataframe(pd.DataFrame(running_table), width="stretch", hide_index=True)
         else:
-            st.info("No hay items en running ahora mismo.")
+            st.info("No hay elementos en ejecución ahora mismo.")
     except Exception as exc:
-        st.error(f"No se pudo cargar el detalle de running: {exc}")
+        st.error(f"No se pudo cargar el detalle de la ejecución: {exc}")
 else:
-    st.success("No hay items en running.")
+    st.success("No hay elementos en ejecución.")
 
 review_queue = snapshot.get("review_queue", [])
 st.subheader("Cola de revisión")
@@ -397,9 +518,9 @@ if review_queue:
     ids = [str(item.get("id") or "").strip() for item in review_queue]
     ids = [item for item in ids if item]
 
-    selected_review_id = st.selectbox("Libro en review", ids, key="review_book_id")
+    selected_review_id = st.selectbox("Libro en revisión", ids, key="review_book_id")
     action = st.selectbox(
-        "Accion",
+        "Acción",
         [
             "approve",
             "retry_from_ocr",
@@ -412,7 +533,7 @@ if review_queue:
 
     col_action, col_mark = st.columns(2)
     with col_action:
-        if st.button("Aplicar accion de review"):
+        if st.button("Aplicar acción de revisión"):
             try:
                 payload = {"action": action, "max_attempts": int(max_attempts)}
                 payload["ocr_provider"] = ocr_provider
@@ -423,26 +544,26 @@ if review_queue:
                 result = api_post(
                     f"/workflow/review/{selected_review_id}",
                     json=payload,
-                    timeout=600.0,
+                    timeout=None,
                 )
-                st.success("Accion aplicada")
+                st.success("Acción aplicada")
                 st.json(result)
             except Exception as exc:
-                st.error(f"No se pudo aplicar la accion: {exc}")
+                st.error(f"No se pudo aplicar la acción: {exc}")
 
     with col_mark:
-        if st.button("Marcar nuevamente en review"):
+        if st.button("Marcar de nuevo para revisión"):
             try:
                 payload = {
-                    "reason": "Marcado manual desde pagina de orquestación",
+                    "reason": "Marcado manual desde la página de orquestación",
                     "node": "manual",
                 }
                 result = api_post(
                     f"/workflow/review/{selected_review_id}/mark", json=payload
                 )
-                st.success("Libro marcado en review")
+                st.success("Libro marcado para revisión")
                 st.json(result)
             except Exception as exc:
-                st.error(f"No se pudo marcar en review: {exc}")
+                st.error(f"No se pudo marcar para revisión: {exc}")
 else:
     st.success("No hay libros en cola de revisión.")

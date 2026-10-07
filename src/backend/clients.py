@@ -2,11 +2,20 @@ from typing import Any
 
 import requests
 
-from .config import OLLAMA_BASE_URL, OLLAMA_TIMEOUT_SECONDS, REQUEST_TIMEOUT_SECONDS
+from .config import (
+    LLM_TIMEOUT_SECONDS,
+    OLLAMA_BASE_URL,
+    OLLAMA_TIMEOUT_SECONDS,
+    REQUEST_TIMEOUT_SECONDS,
+)
 
 
 class ClientError(RuntimeError):
     """Raised when external model providers fail."""
+
+
+class ClientTimeoutError(ClientError):
+    """Raised when one model request exceeds its configured timeout."""
 
 
 def _normalize_base_url(base_url: str | None = None) -> str:
@@ -39,6 +48,10 @@ def _ollama_post_json(
 ) -> dict[str, Any]:
     try:
         response = requests.post(url, json=body, timeout=timeout)
+    except requests.Timeout as exc:
+        raise ClientTimeoutError(
+            f"{operation} timed out after {timeout} seconds"
+        ) from exc
     except Exception as exc:
         raise ClientError(f"{operation} request failed: {exc}") from exc
 
@@ -134,6 +147,8 @@ def ollama_chat_with_images(
         chat_error = ClientError(
             f"Ollama /api/chat returned empty content for {chat_url}"
         )
+    except ClientTimeoutError:
+        raise
     except ClientError as exc:
         chat_error = exc
 
@@ -151,6 +166,8 @@ def ollama_chat_with_images(
         raise ClientError(
             f"Ollama /api/generate returned empty response for {generate_url}"
         )
+    except ClientTimeoutError:
+        raise
     except ClientError as exc:
         if chat_error:
             raise ClientError(f"{chat_error}; fallback failed: {exc}") from exc
@@ -196,6 +213,8 @@ def ollama_chat_text(
         chat_error = ClientError(
             f"Ollama /api/chat returned empty content for {chat_url}"
         )
+    except ClientTimeoutError:
+        raise
     except ClientError as exc:
         chat_error = exc
 
@@ -213,6 +232,8 @@ def ollama_chat_text(
         raise ClientError(
             f"Ollama /api/generate returned empty response for {generate_url}"
         )
+    except ClientTimeoutError:
+        raise
     except ClientError as exc:
         if chat_error:
             raise ClientError(f"{chat_error}; fallback failed: {exc}") from exc
@@ -228,7 +249,7 @@ def openai_vision_chat(
 ) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
 
     try:
         response = client.chat.completions.create(
@@ -262,7 +283,7 @@ def openai_vision_chat(
 def openai_text_chat(*, api_key: str, model: str, prompt: str) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
 
     try:
         response = client.chat.completions.create(

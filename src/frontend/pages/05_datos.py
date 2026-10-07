@@ -41,12 +41,12 @@ def _snapshot_rows(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "ID": snapshot.get("snapshot_id"),
                 "Origen": _snapshot_origin(snapshot),
                 "Esquema": snapshot.get("schema_version"),
-                "Tamano MB": round(
+                "Tamaño (MB)": round(
                     float(snapshot.get("db_size_bytes") or 0) / (1024 * 1024), 2
                 ),
-                "Valido": bool(snapshot.get("valid")),
+                "Válido": bool(snapshot.get("valid")),
                 "Importable": bool(snapshot.get("importable")),
-                "Requiere migracion": bool(snapshot.get("migration_required")),
+                "Requiere migración": bool(snapshot.get("migration_required")),
                 "Protegido": bool(snapshot.get("protected")),
                 "Notas": snapshot.get("notes"),
                 "Error": snapshot.get("error") or snapshot.get("compatibility_error"),
@@ -77,59 +77,59 @@ external_snapshot_id = (
 )
 
 summary_left, summary_middle, summary_right = st.columns(3, gap="large")
-summary_left.metric("Snapshots", int(status.get("snapshots_count") or 0))
+summary_left.metric("Instantáneas", int(status.get("snapshots_count") or 0))
 summary_middle.metric("Importables", int(status.get("importable_snapshots_count") or 0))
 summary_right.metric(
     "Incompatibles", int(status.get("incompatible_snapshots_count") or 0)
 )
 
 st.caption(f"Base local: `{status.get('local_db_path')}`")
-st.caption(f"Carpeta de snapshots: `{status.get('snapshots_dir')}`")
+st.caption(f"Carpeta de instantáneas: `{status.get('snapshots_dir')}`")
 st.caption(f"Origen: `{status.get('actor')}` / `{status.get('device')}`")
 st.caption(f"Esquema local: `{status.get('schema_version')}`")
 
 if external_snapshot:
     st.warning(
-        "Snapshot externo pendiente de importar: "
+        "Instantánea externa pendiente de importar: "
         f"`{external_snapshot_id}` ({_snapshot_origin(external_snapshot) or 'origen desconocido'})."
     )
 else:
-    st.caption("No se detectan snapshots externos pendientes de importar.")
+    st.caption("No se detectan instantáneas externas pendientes de importar.")
 
 action_left, action_right = st.columns([1, 1], gap="small")
 with action_left:
-    if st.button("Publicar snapshot", type="primary", width="stretch"):
+    if st.button("Publicar instantánea", type="primary", width="stretch"):
         try:
             result = api_post(
                 "/snapshots/publish",
-                json={"notes": "Snapshot manual desde Streamlit"},
+                json={"notes": "Instantánea manual desde Streamlit"},
                 timeout=LONG_TIMEOUT_SECONDS,
             )
         except Exception as exc:
-            st.error(f"No se pudo publicar el snapshot: {exc}")
+            st.error(f"No se pudo publicar la instantánea: {exc}")
         else:
             snapshot = result.get("snapshot") or {}
-            st.success(f"Snapshot publicado: `{snapshot.get('snapshot_id')}`")
+            st.success(f"Instantánea publicada: `{snapshot.get('snapshot_id')}`")
             st.rerun()
 
 with action_right:
-    if st.button("Limpiar snapshots antiguos", width="stretch"):
+    if st.button("Limpiar instantáneas antiguas", width="stretch"):
         try:
             result = api_post("/snapshots/cleanup", timeout=LONG_TIMEOUT_SECONDS)
         except Exception as exc:
-            st.error(f"No se pudieron limpiar los snapshots: {exc}")
+            st.error(f"No se pudieron limpiar las instantáneas: {exc}")
         else:
-            st.success(f"Snapshots eliminados: {len(result.get('deleted') or [])}")
+            st.success(f"Instantáneas eliminadas: {len(result.get('deleted') or [])}")
             st.rerun()
 
-with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
+with st.expander("Importar instantánea", expanded=bool(external_snapshot)):
     st.caption(
-        "La importacion sustituye la base local por el snapshot elegido. "
-        "Primero se valida y migra una copia; despues se crea un backup "
-        "automatico en `data/backups/local`."
+        "La importación sustituye la base local por la instantánea elegida. "
+        "Primero se valida y migra una copia; después se crea una copia de seguridad "
+        "automática en `data/backups/local`."
     )
     if not importable_snapshots:
-        st.info("No hay snapshots validos y compatibles para importar.")
+        st.info("No hay instantáneas válidas y compatibles para importar.")
     else:
         snapshot_ids = list(snapshot_by_id)
         default_index = (
@@ -138,7 +138,7 @@ with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
             else 0
         )
         selected_snapshot_id = st.selectbox(
-            "Snapshot",
+            "Instantánea",
             snapshot_ids,
             index=default_index,
             format_func=lambda snapshot_id: _snapshot_label(
@@ -149,7 +149,7 @@ with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
         if selected_snapshot.get("migration_required"):
             st.info(
                 f"El esquema `{selected_snapshot.get('schema_version')}` se "
-                f"actualizara a `{selected_snapshot.get('current_schema_version')}` "
+                f"actualizará a `{selected_snapshot.get('current_schema_version')}` "
                 "antes de sustituir la base local."
             )
         else:
@@ -157,10 +157,10 @@ with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
                 f"Esquema compatible: `{selected_snapshot.get('schema_version')}`."
             )
         confirm_import = st.checkbox(
-            "Confirmo que quiero sustituir la base local por el snapshot seleccionado"
+            "Confirmo que quiero sustituir la base local por la instantánea seleccionada"
         )
         if st.button(
-            "Importar snapshot seleccionado",
+            "Importar instantánea seleccionada",
             type="primary",
             disabled=not confirm_import,
             width="stretch",
@@ -172,14 +172,16 @@ with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
                     timeout=LONG_TIMEOUT_SECONDS,
                 )
             except Exception as exc:
-                st.error(f"No se pudo importar el snapshot: {exc}")
+                st.error(f"No se pudo importar la instantánea: {exc}")
             else:
                 imported_snapshot = result.get("snapshot") or {}
                 st.success(
-                    f"Snapshot importado: `{imported_snapshot.get('snapshot_id')}`"
+                    f"Instantánea importada: `{imported_snapshot.get('snapshot_id')}`"
                 )
                 if result.get("backup_path"):
-                    st.info(f"Backup local creado: `{result.get('backup_path')}`")
+                    st.info(
+                        f"Copia de seguridad local creada: `{result.get('backup_path')}`"
+                    )
                 migration = result.get("migration") or {}
                 applied_now = migration.get("applied_now") or []
                 if applied_now:
@@ -189,12 +191,12 @@ with st.expander("Importar snapshot", expanded=bool(external_snapshot)):
                     )
                 st.caption(f"Esquema importado: `{migration.get('schema_version')}`.")
                 st.warning(
-                    "Reinicia la aplicacion antes de continuar para cerrar "
-                    "cualquier operacion que estuviera usando la base anterior."
+                    "Reinicia la aplicación antes de continuar para cerrar "
+                    "cualquier operación que estuviera usando la base anterior."
                 )
 
 rows = _snapshot_rows(snapshots)
 if rows:
     st.dataframe(rows, hide_index=True, width="stretch")
 else:
-    st.info("Aun no hay snapshots publicados.")
+    st.info("Aún no hay instantáneas publicadas.")

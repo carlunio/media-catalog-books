@@ -42,6 +42,7 @@ def workflow_run(payload: WorkflowRunRequest):
             stop_after=payload.stop_after,
             action=payload.action,
             overwrite=payload.overwrite,
+            download_cover_after_metadata=payload.download_cover_after_metadata,
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
@@ -108,6 +109,7 @@ def workflow_review_action(book_id: str, payload: WorkflowReviewRequest):
         result = workflow.review_action(
             book_id,
             action=payload.action,
+            download_cover_after_metadata=payload.download_cover_after_metadata,
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,
             ocr_model=payload.ocr_model,
@@ -169,6 +171,7 @@ def run_metadata(payload: RunMetadataRequest):
             start_stage="metadata",
             stop_after="metadata",
             overwrite=payload.overwrite,
+            download_cover_after_metadata=payload.download_cover_after_metadata,
             max_attempts=WORKFLOW_MAX_ATTEMPTS,
         )
     except ValueError as exc:
@@ -199,15 +202,12 @@ def run_catalog(payload: RunCatalogRequest):
 @router.post("/cover/download")
 def run_cover(payload: RunCoverRequest):
     try:
-        return workflow.run_batch(
+        return workflow.run_cover_batch(
             book_id=payload.book_id,
             block=payload.block,
             module=payload.module,
             limit=payload.limit,
-            start_stage="cover",
-            stop_after="cover",
             overwrite=payload.overwrite,
-            max_attempts=WORKFLOW_MAX_ATTEMPTS,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

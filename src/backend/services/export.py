@@ -264,7 +264,7 @@ def validate_export_rows(
                         "quantity": None,
                         "is_valid": False,
                         "errors": [
-                            "La ficha no existe o no esta en estado exportable."
+                            "La ficha no existe o no está en estado exportable."
                         ],
                     }
                 )

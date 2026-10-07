@@ -93,7 +93,7 @@ def _repack_database(source_path: Path, target_path: Path) -> None:
         con.execute("CHECKPOINT")
         db_list = con.execute("PRAGMA database_list").fetchall()
         if not db_list:
-            raise SnapshotError("No se pudo resolver el catalogo activo de DuckDB.")
+            raise SnapshotError("No se pudo resolver el catálogo activo de DuckDB.")
         catalog_name = str(db_list[0][1])
         con.execute(f"ATTACH {_duckdb_sql_string(target_path)} AS snapshot")
         con.execute(f'COPY FROM DATABASE "{catalog_name}" TO snapshot')
@@ -183,8 +183,8 @@ def _schema_compatibility(schema_version: Any) -> dict[str, Any]:
         error = "El manifiesto no indica schema_version."
     else:
         error = (
-            f"El esquema `{source_version}` no es compatible con esta version "
-            f"de la app (`{current_version}`)."
+            f"El esquema `{source_version}` no es compatible con esta versión "
+            f"de la aplicación (`{current_version}`)."
         )
     return {
         "compatible": False,
@@ -204,7 +204,7 @@ def _manifest_to_snapshot(
             "snapshot_id": manifest_path.stem,
             "manifest_path": str(manifest_path),
             "valid": False,
-            "error": "Manifiesto JSON no valido.",
+            "error": "Manifiesto JSON no válido.",
         }
 
     db_filename = str(manifest.get("db_filename") or "")
@@ -390,7 +390,7 @@ def publish_snapshot(
         migration_status = migrations.migrate()
     except Exception as exc:
         raise SnapshotError(
-            f"No se puede publicar una base con esquema no valido: {exc}"
+            f"No se puede publicar una base con esquema no válido: {exc}"
         ) from exc
 
     snapshots_path = _snapshots_dir()
@@ -455,12 +455,12 @@ def _find_snapshot(snapshot_id: str) -> dict[str, Any]:
         if str(snapshot.get("snapshot_id") or "") != clean_snapshot_id:
             continue
         if not snapshot.get("valid"):
-            error = str(snapshot.get("error") or "Snapshot no valido.")
+            error = str(snapshot.get("error") or "Instantánea no válida.")
             raise SnapshotError(f"No se puede importar `{clean_snapshot_id}`: {error}")
         if not snapshot.get("compatible"):
             error = str(
                 snapshot.get("compatibility_error")
-                or "La version de esquema no es compatible."
+                or "La versión del esquema no es compatible."
             )
             raise SnapshotError(f"No se puede importar `{clean_snapshot_id}`: {error}")
         return snapshot
@@ -478,7 +478,7 @@ def _unique_path(path: Path) -> Path:
         candidate = path.with_name(f"{stem}_{index}{suffix}")
         if not candidate.exists():
             return candidate
-    raise SnapshotError(f"No se pudo generar un nombre unico para `{path}`.")
+    raise SnapshotError(f"No se pudo generar un nombre único para `{path}`.")
 
 
 def _backup_local_database(snapshot_id: str) -> Path | None:
@@ -540,7 +540,7 @@ def _prepare_import_candidate(
 
     if status.get("pending_count"):
         raise SnapshotError(
-            "El snapshot conserva migraciones pendientes despues de prepararlo."
+            "El snapshot conserva migraciones pendientes después de prepararlo."
         )
     return {
         "source_schema_version": str(snapshot.get("schema_version") or ""),
@@ -571,7 +571,7 @@ def _restore_local_database(backup_path: Path | None) -> None:
 
 def import_snapshot(*, snapshot_id: str, confirm: bool = False) -> dict[str, Any]:
     if not confirm:
-        raise SnapshotError("La importacion requiere confirm=true.")
+        raise SnapshotError("La importación requiere confirm=true.")
 
     snapshot = _find_snapshot(snapshot_id)
     source_path = Path(str(snapshot["path"]))
@@ -604,12 +604,12 @@ def import_snapshot(*, snapshot_id: str, confirm: bool = False) -> dict[str, Any
             except Exception as restore_exc:
                 backup_hint = str(backup_path) if backup_path else "no disponible"
                 raise SnapshotError(
-                    "La importacion fallo despues de sustituir la base y no se "
-                    "pudo restaurar automaticamente. Backup local: "
-                    f"{backup_hint}. Error de restauracion: {restore_exc}"
+                    "La importación falló después de sustituir la base y no se "
+                    "pudo restaurar automáticamente. Copia de seguridad local: "
+                    f"{backup_hint}. Error de restauración: {restore_exc}"
                 ) from restore_exc
             raise SnapshotError(
-                "No se pudo registrar la importacion; la base local anterior "
+                "No se pudo registrar la importación; la base local anterior "
                 f"se ha restaurado: {exc}"
             ) from exc
     finally:

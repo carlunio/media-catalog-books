@@ -979,7 +979,7 @@ if consolidate_requested:
 
 if bool(st.session_state.get(confirm_key)) and not is_consolidated:
     st.warning(
-        "Al consolidar, la ficha quedará protegida frente al workflow, la "
+        "Al consolidar, la ficha quedará protegida frente al flujo de trabajo, la "
         "sincronización automática y la edición. Podrás reabrirla expresamente."
     )
     confirm_col, cancel_col = st.columns(2)

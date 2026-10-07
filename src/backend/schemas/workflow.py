@@ -23,6 +23,7 @@ class WorkflowRunRequest(BaseModel):
     stop_after: WorkflowStage | None = None
     action: str | None = None
     overwrite: bool = False
+    download_cover_after_metadata: bool = True
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None
@@ -33,6 +34,7 @@ class WorkflowRunRequest(BaseModel):
 
 class WorkflowReviewRequest(BaseModel):
     action: WorkflowReviewAction
+    download_cover_after_metadata: bool = True
     max_attempts: int | None = Field(default=None, ge=0, le=20)
     ocr_provider: OcrProvider | None = None
     ocr_model: str | None = None

@@ -47,7 +47,7 @@ ISBN_CANDIDATE_PATTERN = re.compile(r"[0-9XxIiLlOo\- ]{9,}")
 STAGE_ORDER = ("ocr", "metadata", "catalog", "cover")
 STAGE_LABELS = {
     "ocr": "OCR",
-    "metadata": "Metadata",
+    "metadata": "Metadatos",
     "catalog": "Catalog",
     "cover": "Cover",
 }
@@ -123,12 +123,12 @@ def _isbn_candidate_detail(raw: str | None) -> dict:
 
 def _reason_label(code: str | None) -> str:
     mapping = {
-        "valid_isbn10_checksum": "ISBN-10 valido (checksum)",
-        "valid_isbn13_checksum": "ISBN-13 valido (checksum)",
-        "invalid_isbn10_checksum": "ISBN-10 invalido (checksum)",
-        "invalid_isbn13_checksum": "ISBN-13 invalido (checksum)",
-        "invalid_length_or_chars": "Formato invalido (longitud/caracteres)",
-        "invalid_format": "Formato invalido",
+        "valid_isbn10_checksum": "ISBN-10 válido (suma de comprobación)",
+        "valid_isbn13_checksum": "ISBN-13 válido (suma de comprobación)",
+        "invalid_isbn10_checksum": "ISBN-10 inválido (suma de comprobación)",
+        "invalid_isbn13_checksum": "ISBN-13 inválido (suma de comprobación)",
+        "invalid_length_or_chars": "Formato inválido (longitud o caracteres)",
+        "invalid_format": "Formato inválido",
     }
     key = str(code or "").strip()
     return mapping.get(key, key or "desconocido")
@@ -309,8 +309,8 @@ if not scope_module:
 
 mode_labels = {
     "all": "Mostrar todos",
-    "review": "Solo en review",
-    "review_ocr": "Solo review OCR/ISBN",
+    "review": "Solo en revisión",
+    "review_ocr": "Solo revisión de OCR/ISBN",
 }
 if "book_review_filter_mode" not in st.session_state:
     st.session_state["book_review_filter_mode"] = "all"
@@ -429,12 +429,12 @@ with right:
     st.markdown("### OCR + ISBN")
 
     metrics_a, metrics_b, metrics_c = st.columns(3)
-    metrics_a.metric("ISBN validado", "si" if bool(book.get("isbn")) else "no")
+    metrics_a.metric("ISBN validado", "sí" if bool(book.get("isbn")) else "no")
     metrics_b.metric(
         "Cand. detectados", len(validation_from_text.get("raw_candidates") or [])
     )
     metrics_c.metric(
-        "Cand. validos", len(validation_from_text.get("valid_candidates") or [])
+        "Cand. válidos", len(validation_from_text.get("valid_candidates") or [])
     )
 
     if validation_from_text.get("isbn"):
@@ -444,7 +444,7 @@ with right:
         )
     elif st.session_state.get(credits_key, "").strip():
         st.warning(
-            "No hay ISBN valido detectado en el texto OCR con las reglas actuales."
+            "No hay ningún ISBN válido detectado en el texto OCR con las reglas actuales."
         )
 
     manual_isbn_input = str(st.session_state.get(isbn_key, "")).strip()
@@ -453,10 +453,10 @@ with right:
     if manual_candidate:
         manual_detail = _isbn_candidate_detail(manual_candidate)
         if bool(manual_detail.get("valid")):
-            st.info(f"ISBN manual actual valido: {manual_detail.get('cleaned')}")
+            st.info(f"ISBN manual actual válido: {manual_detail.get('cleaned')}")
         else:
             st.warning(
-                "ISBN manual actual invalido: "
+                "ISBN manual actual inválido: "
                 f"{manual_detail.get('cleaned') or manual_detail.get('raw')} "
                 f"({ _reason_label(manual_detail.get('reason')) })"
             )
@@ -472,7 +472,7 @@ with right:
                 "raw": str(item.get("raw") or ""),
                 "cleaned": str(item.get("cleaned") or ""),
                 "tipo": str(item.get("kind") or "unknown"),
-                "valido": "si" if bool(item.get("valid")) else "no",
+                "válido": "sí" if bool(item.get("valid")) else "no",
                 "motivo": _reason_label(item.get("reason")),
             }
             for item in candidate_details
@@ -480,7 +480,7 @@ with right:
         st.markdown("Candidatos ISBN detectados")
         st.dataframe(table_rows, hide_index=True, width="stretch")
 
-    with st.expander("Detalle de validacion ISBN", expanded=False):
+    with st.expander("Detalle de validación del ISBN", expanded=False):
         st.json(validation_from_text)
 
     with st.form(f"ocr_review_form_{selected_id}"):
@@ -526,7 +526,7 @@ with right:
                     st.success(f"ISBN final validado: {isbn_value}")
                 else:
                     st.warning(
-                        "No se pudo validar ISBN final (se guardo OCR y ISBN raw)."
+                        "No se pudo validar ISBN final (se guardó el OCR y ISBN raw)."
                     )
                 with st.expander("Resultado de guardado", expanded=False):
                     st.json(result)
@@ -555,7 +555,7 @@ with right:
             st.error(f"No se pudo consolidar ISBN: {exc}")
 
 st.divider()
-st.subheader("Acciones de review")
+st.subheader("Acciones de revisión")
 
 if bool(book.get("workflow_needs_review")):
     review_reason = str(
@@ -569,10 +569,12 @@ if bool(book.get("workflow_needs_review")):
 
     if origin_stage:
         st.caption(
-            f"Entró en review desde etapa: **{STAGE_LABELS.get(origin_stage, origin_stage)}**"
+            f"Entró en revisión desde la etapa: **{STAGE_LABELS.get(origin_stage, origin_stage)}**"
         )
     else:
-        st.caption("No se pudo inferir con precisión la etapa origen de review.")
+        st.caption(
+            "No se pudo inferir con precisión la etapa de origen de la revisión."
+        )
 
     retry_options = _retry_stage_options(book, origin_stage=origin_stage)
     default_retry_stage = (
@@ -585,9 +587,9 @@ if bool(book.get("workflow_needs_review")):
     action_col_a, action_col_b = st.columns(2)
     with action_col_a:
         approve_label = (
-            "Aceptar que no tiene ISBN y salir de review"
+            "Aceptar que no tiene ISBN y salir de la revisión"
             if accepts_missing_isbn
-            else "Aprobar y salir de review"
+            else "Aprobar y salir de la revisión"
         )
         if st.button(approve_label, key="book_review_approve"):
             try:
@@ -598,7 +600,7 @@ if bool(book.get("workflow_needs_review")):
                 )
                 if accepts_missing_isbn:
                     st.success(
-                        "Ausencia de ISBN aceptada. El libro puede continuar desde metadata."
+                        "Ausencia de ISBN aceptada. El libro puede continuar desde los metadatos."
                     )
                 else:
                     st.success("Libro aprobado")
@@ -642,45 +644,82 @@ if bool(book.get("workflow_needs_review")):
                         "catalog_provider": catalog_provider_default,
                         "catalog_model": catalog_model_default,
                     },
-                    timeout=600.0,
+                    timeout=None,
                 )
                 stage_label = STAGE_LABELS.get(str(retry_stage), str(retry_stage))
-                st.success(f"Workflow relanzado desde {stage_label}")
+                st.success(f"Flujo relanzado desde {stage_label}")
                 st.rerun()
             except requests.exceptions.ReadTimeout:
-                st.error("Timeout relanzando workflow")
+                st.error("Tiempo de espera agotado al relanzar el flujo")
             except Exception as exc:
-                st.error(f"No se pudo relanzar workflow: {exc}")
+                st.error(f"No se pudo relanzar el flujo: {exc}")
 else:
-    st.info("Este libro no esta en estado review.")
+    st.info("Este libro no está en revisión.")
 
 with st.expander("Traza OCR", expanded=False):
     st.json(book.get("ocr_trace") or {})
 
-with st.expander("Editar metadata (JSON)", expanded=False):
+metadata_payload = (
+    book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+)
+provider_statuses = metadata_payload.get("provider_statuses")
+if isinstance(provider_statuses, dict):
+    st.caption("Estado de las fuentes bibliográficas")
+    status_labels = {
+        "fetched": "Con datos",
+        "empty": "Sin resultados",
+        "error": "Error",
+        "not_fetched": "No consultado",
+    }
+    provider_columns = st.columns(3)
+    for column, (provider_key, provider_label) in zip(
+        provider_columns,
+        (
+            ("google", "Google Books"),
+            ("open_library", "Open Library"),
+            ("isbndb", "ISBNdb"),
+        ),
+        strict=True,
+    ):
+        provider_status = (
+            str(provider_statuses.get(provider_key) or "not_fetched").strip().lower()
+        )
+        column.metric(
+            provider_label,
+            status_labels.get(provider_status, provider_status or "Desconocido"),
+        )
+
+    provider_errors = metadata_payload.get("errors")
+    if isinstance(provider_errors, dict):
+        for provider_key, provider_error in provider_errors.items():
+            error_text = str(provider_error or "").strip()
+            if error_text:
+                st.caption(f"{provider_key}: {error_text}")
+
+with st.expander("Editar metadatos (JSON)", expanded=False):
     metadata_json = json.dumps(book.get("metadata") or {}, ensure_ascii=False, indent=2)
     metadata_text = st.text_area("metadata_json", value=metadata_json, height=240)
-    if st.button("Guardar metadata", key=f"save_metadata_{selected_id}"):
+    if st.button("Guardar metadatos", key=f"save_metadata_{selected_id}"):
         try:
             payload = {"metadata": json.loads(metadata_text)}
             api_put(f"/books/{selected_id}/metadata", json=payload, timeout=30.0)
-            st.success("Metadata actualizada")
+            st.success("Metadatos actualizados")
             st.rerun()
         except json.JSONDecodeError as exc:
-            st.error(f"JSON invalido: {exc}")
+            st.error(f"JSON inválido: {exc}")
         except Exception as exc:
-            st.error(f"No se pudo actualizar metadata: {exc}")
+            st.error(f"No se pudieron actualizar los metadatos: {exc}")
 
-with st.expander("Editar catalogo (JSON)", expanded=False):
+with st.expander("Editar catálogo (JSON)", expanded=False):
     catalog_json = json.dumps(book.get("catalog") or {}, ensure_ascii=False, indent=2)
     catalog_text = st.text_area("catalog_json", value=catalog_json, height=240)
-    if st.button("Guardar catalogo", key=f"save_catalog_{selected_id}"):
+    if st.button("Guardar catálogo", key=f"save_catalog_{selected_id}"):
         try:
             payload = {"catalog": json.loads(catalog_text)}
             api_put(f"/books/{selected_id}/catalog", json=payload, timeout=30.0)
-            st.success("Catalogo actualizado")
+            st.success("Catálogo actualizado")
             st.rerun()
         except json.JSONDecodeError as exc:
-            st.error(f"JSON invalido: {exc}")
+            st.error(f"JSON inválido: {exc}")
         except Exception as exc:
-            st.error(f"No se pudo actualizar catalogo: {exc}")
+            st.error(f"No se pudo actualizar el catálogo: {exc}")

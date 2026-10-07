@@ -25,6 +25,10 @@ Eres un asistente experto en bibliografía. Tu tarea es extraer información pre
 4️⃣ Para los campos con nombres de persona (autor, traductor, etc.) usa el formato "Apellido(s), Nombre(s)", utilizando iniciales si es evidente. Se permiten apellidos compuestos o múltiples (por ejemplo: "García Márquez, Gabriel"; "Pérez-Reverte, Arturo"; "de la Cruz, Juana"). Partículas como "de", "del", "de la", preferiblemente delante del apellido.
 5. Los campos de países y de entidades o nombres comunes, categoría, género... en español.
 6. Devuelve nulo si no está claro, incluso en los campos con lista cerrada de opciones.
+7. Distingue siempre entre la edición identificada por el ISBN solicitado y la obra general:
+  - Usa edition_for_requested_isbn y la página de créditos para editorial, fecha o año de publicación, edición, impresión, páginas, encuadernación, idioma y colección.
+  - Usa work_context para identificar título y autoría y para aprovechar sinopsis, descripción y temas/materias al decidir categoría, género y palabras clave.
+  - No conviertas el primer año de publicación de la obra ni listas agregadas de muchas ediciones en datos de esta edición concreta.
 
 🔒 **Contrato estricto de campos de persona (obligatorio)**:
 - Aplica a: `autor`, `editor`, `traductor`, `ilustrador`, `introduccion_de`, `epilogo_de`, `fotografia_de`.
@@ -161,20 +165,72 @@ Aquí están los datos extraídos de diversas fuentes sobre un libro:
 """.strip()
 
 
-GOOGLE_KEYS_TO_DROP = {
-    "allowAnonLogging",
-    "readingModes",
-    "imageLinks",
-    "previewLink",
-    "infoLink",
-    "canonicalVolumeLink",
-}
-OPEN_LIBRARY_KEYS_TO_DROP = {"url", "key"}
-ISBNDB_PATHS_TO_DROP = (
-    ("book", "image"),
-    ("book", "dimensions_structured"),
-    ("book", "dimensions"),
-    ("book", "msrp"),
+GOOGLE_PROMPT_KEYS = (
+    "title",
+    "subtitle",
+    "authors",
+    "publisher",
+    "publishedDate",
+    "description",
+    "industryIdentifiers",
+    "pageCount",
+    "printedPageCount",
+    "categories",
+    "mainCategory",
+    "language",
+)
+
+OPEN_LIBRARY_EDITION_KEYS = (
+    "requested_isbn",
+    "title",
+    "subtitle",
+    "full_title",
+    "publishers",
+    "publish_date",
+    "edition_name",
+    "number_of_pages",
+    "pagination",
+    "physical_format",
+    "languages",
+    "isbn_10",
+    "isbn_13",
+    "identifiers",
+    "by_statement",
+    "contributions",
+    "series",
+    "series_name",
+    "volume",
+    "volume_number",
+)
+OPEN_LIBRARY_WORK_KEYS = (
+    "title",
+    "subtitle",
+    "authors",
+    "author_name",
+    "description",
+    "first_sentence",
+    "subjects",
+    "subject",
+    "first_publish_year",
+)
+ISBNDB_EDITION_KEYS = (
+    "isbn",
+    "isbn10",
+    "isbn13",
+    "publisher",
+    "date_published",
+    "edition",
+    "edition_number",
+    "pages",
+    "binding",
+    "language",
+)
+ISBNDB_WORK_KEYS = (
+    "title",
+    "title_long",
+    "authors",
+    "synopsis",
+    "subjects",
 )
 
 
@@ -207,45 +263,83 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _delete_nested_key(payload: dict[str, Any], path: tuple[str, ...]) -> None:
-    if not path:
-        return
-    if len(path) == 1:
-        payload.pop(path[0], None)
-        return
-    head = payload.get(path[0])
-    if not isinstance(head, dict):
-        return
-    _delete_nested_key(head, path[1:])
+def _select_prompt_fields(
+    payload: dict[str, Any],
+    keys: tuple[str, ...],
+) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+    for key in keys:
+        value = payload.get(key)
+        if value in (None, "", [], {}):
+            continue
+        selected[key] = json.loads(json.dumps(value))
+    return selected
+
+
+def _clean_open_library_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
+    edition = payload.get("edition")
+    work = payload.get("work")
+
+    if isinstance(edition, dict) or isinstance(work, dict):
+        cleaned: dict[str, Any] = {}
+        requested_isbn = str(payload.get("requested_isbn") or "").strip()
+        if requested_isbn:
+            cleaned["requested_isbn"] = requested_isbn
+        if isinstance(edition, dict):
+            edition_clean = _select_prompt_fields(
+                edition,
+                OPEN_LIBRARY_EDITION_KEYS,
+            )
+            if edition_clean:
+                cleaned["edition_for_requested_isbn"] = edition_clean
+        if isinstance(work, dict):
+            work_clean = _select_prompt_fields(work, OPEN_LIBRARY_WORK_KEYS)
+            if work_clean:
+                cleaned["work_context"] = work_clean
+        return cleaned
+
+    # Legacy Open Library rows came from Search API work aggregates. Keep only
+    # work-level descriptive context; publishers, dates, ISBN lists and page
+    # medians from those rows can represent hundreds of different editions.
+    work_context = _select_prompt_fields(payload, OPEN_LIBRARY_WORK_KEYS)
+    return {"work_context": work_context} if work_context else {}
+
+
+def _clean_isbndb_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
+    book = payload.get("book")
+    if not isinstance(book, dict):
+        return {}
+
+    edition = _select_prompt_fields(book, ISBNDB_EDITION_KEYS)
+    work = _select_prompt_fields(book, ISBNDB_WORK_KEYS)
+    cleaned: dict[str, Any] = {}
+    if edition:
+        cleaned["edition_for_requested_isbn"] = edition
+    if work:
+        cleaned["work_context"] = work
+    return cleaned
 
 
 def _clean_sources_for_prompt(
     metadata: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    google = (
-        dict(metadata.get("google") or {})
-        if isinstance(metadata.get("google"), dict)
-        else {}
+    google_raw = (
+        metadata.get("google") if isinstance(metadata.get("google"), dict) else {}
     )
-    open_library = (
-        dict(metadata.get("open_library") or {})
+    open_library_raw = (
+        metadata.get("open_library")
         if isinstance(metadata.get("open_library"), dict)
         else {}
     )
-    isbndb = (
-        json.loads(json.dumps(metadata.get("isbndb") or {}))
-        if isinstance(metadata.get("isbndb"), dict)
-        else {}
+    isbndb_raw = (
+        metadata.get("isbndb") if isinstance(metadata.get("isbndb"), dict) else {}
     )
 
-    for key in GOOGLE_KEYS_TO_DROP:
-        google.pop(key, None)
-    for key in OPEN_LIBRARY_KEYS_TO_DROP:
-        open_library.pop(key, None)
-    for path in ISBNDB_PATHS_TO_DROP:
-        _delete_nested_key(isbndb, path)
-
-    return google, open_library, isbndb
+    return (
+        _select_prompt_fields(google_raw, GOOGLE_PROMPT_KEYS),
+        _clean_open_library_for_prompt(open_library_raw),
+        _clean_isbndb_for_prompt(isbndb_raw),
+    )
 
 
 def _isbndb_dimensions_metric(metadata: dict[str, Any]) -> dict[str, Any]:

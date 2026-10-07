@@ -256,6 +256,7 @@ def _configuration_issues(
         "APP_UPDATE_TIMEOUT_SECONDS",
         "APP_STARTUP_TIMEOUT_SECONDS",
         "REQUEST_TIMEOUT_SECONDS",
+        "LLM_TIMEOUT_SECONDS",
         "API_TIMEOUT_SECONDS",
         "API_LONG_TIMEOUT_SECONDS",
     ):

@@ -126,6 +126,7 @@ def test_import_migrates_v0_1_1_candidate_and_preserves_local_backup(
         "0001_baseline",
         "0002_v0_1_1",
         "0003_form_lifecycle",
+        "0004_optional_cover_branch",
     ]
     assert result["restart_required"] is True
     assert (
@@ -152,6 +153,7 @@ def test_import_migrates_v0_1_1_candidate_and_preserves_local_backup(
         ("0001_baseline",),
         ("0002_v0_1_1",),
         ("0003_form_lifecycle",),
+        ("0004_optional_cover_branch",),
     ]
 
     backup_path = Path(result["backup_path"])

@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 import re
 import tempfile
@@ -5,12 +6,12 @@ from typing import Any
 
 from PIL import Image
 
-try:
-    from ollama import chat as ollama_chat  # type: ignore
-except Exception:  # pragma: no cover
-    ollama_chat = None
-
-from ..clients import ClientError
+from ..clients import (
+    ClientError,
+    ClientTimeoutError,
+    ollama_chat_text,
+    ollama_chat_with_images,
+)
 from ..config import OCR_ISBN_OLLAMA_MODEL, OCR_OLLAMA_MODEL
 from ..normalizers import clean_isbn, is_valid_isbn
 from . import books
@@ -40,26 +41,6 @@ ISBN_PROMPT = (
 )
 
 ISBN_CANDIDATE_PATTERN = re.compile(r"[0-9XxIiLlOo\- ]{9,}")
-
-
-def _extract_ollama_content(response: Any) -> str:
-    if isinstance(response, dict):
-        message = response.get("message")
-        if isinstance(message, dict):
-            return str(message.get("content") or "").strip()
-        return str(response.get("response") or "").strip()
-
-    message = getattr(response, "message", None)
-    if message is not None:
-        content = getattr(message, "content", None)
-        if content is not None:
-            return str(content).strip()
-
-    fallback = getattr(response, "response", None)
-    if fallback is not None:
-        return str(fallback).strip()
-
-    return ""
 
 
 def _normalize_ocular_isbn_confusions(text: str) -> str:
@@ -175,33 +156,19 @@ def _isbn_candidate_details(candidates: list[str]) -> list[dict[str, Any]]:
 
 
 def _ollama_chat_with_image(*, model: str, image_path: Path, prompt: str) -> str:
-    if ollama_chat is None:
-        raise ClientError("ollama package is not available in this environment")
-
     if not image_path.exists() or not image_path.is_file():
         raise ClientError(f"Image path not found: {image_path}")
 
     try:
-        response = ollama_chat(
-            model=model,
-            keep_alive="5m",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                    "images": [str(image_path)],
-                }
-            ],
-            options={"temperature": 0.0},
-        )
-    except Exception as exc:
-        raise ClientError(f"Ollama chat failed: {exc}") from exc
+        encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    except OSError as exc:
+        raise ClientError(f"Could not read image {image_path}: {exc}") from exc
 
-    text = _extract_ollama_content(response)
-    if not text:
-        raise ClientError("Ollama chat returned empty content")
-
-    return text
+    return ollama_chat_with_images(
+        model=model,
+        prompt=prompt,
+        images_base64=[encoded_image],
+    )
 
 
 def _is_glm_ocr_model(model: str | None) -> bool:
@@ -349,24 +316,10 @@ def _extract_isbn_with_llm(credits_text: str, *, model: str) -> dict[str, Any]:
             "source": "empty_ocr_text",
         }
 
-    if ollama_chat is None:
-        raise ClientError("ollama package is not available in this environment")
-
-    try:
-        response = ollama_chat(
-            model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"{ISBN_PROMPT}\n\nTEXTO:\n{text}",
-                }
-            ],
-            options={"temperature": 0.0},
-        )
-    except Exception as exc:
-        raise ClientError(f"Ollama ISBN chat failed: {exc}") from exc
-
-    raw = _extract_ollama_content(response)
+    raw = ollama_chat_text(
+        model=model,
+        prompt=f"{ISBN_PROMPT}\n\nTEXTO:\n{text}",
+    )
     normalized = _normalize_ocular_isbn_confusions(raw)
     candidates = _clean_isbn_candidates(normalized)
     candidate_details = _isbn_candidate_details(candidates)
@@ -422,6 +375,12 @@ def _ocr_with_model(
                 attempt["status"] = "invalid"
                 attempt["chars"] = 0
                 attempt["error"] = "Provider returned empty OCR text"
+        except ClientTimeoutError as exc:
+            attempt["status"] = "error"
+            attempt["chars"] = 0
+            attempt["error"] = str(exc)
+            traces.append(attempt)
+            return "", traces
         except Exception as exc:
             attempt["status"] = "error"
             attempt["chars"] = 0

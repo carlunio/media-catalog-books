@@ -3,7 +3,9 @@ import sys
 from pathlib import Path
 
 import duckdb
+import pillow_heif
 from fastapi.testclient import TestClient
+from PIL import Image
 
 EXPORT_COLUMNS = [
     "listingid",
@@ -97,6 +99,10 @@ def test_schema_is_initialized_with_incremental_migrations(tmp_path, monkeypatch
                 "0003_form_lifecycle",
                 "Añade borrador, consolidación y aceptación de libros sin ISBN",
             ),
+            (
+                "0004_optional_cover_branch",
+                "Separa la descarga opcional de portadas del workflow principal",
+            ),
         ]
 
         relation = con.execute(
@@ -110,6 +116,76 @@ def test_schema_is_initialized_with_incremental_migrations(tmp_path, monkeypatch
         ).fetchone()
         assert relation is not None
         assert str(relation[0]).upper() == "VIEW"
+
+
+def test_ingest_previews_and_confirms_heic_changes(tmp_path, monkeypatch):
+    input_dir = tmp_path / "input"
+    for block in ("A", "B", "C"):
+        (input_dir / block).mkdir(parents=True)
+    module = input_dir / "A" / "01"
+    module.mkdir()
+    source = module / "1a1.HEIC"
+    orphan = module / "01A0002_2.jpg"
+    collision_source = module / "1a3.jpg"
+    collision_target = module / "01A0003.jpg"
+    pillow_heif.register_heif_opener()
+    Image.new("RGB", (12, 8), "red").save(source, format="HEIF")
+    Image.new("RGB", (12, 8), "blue").save(orphan, format="JPEG")
+    Image.new("RGB", (12, 8), "green").save(collision_source, format="JPEG")
+    Image.new("RGB", (12, 8), "yellow").save(collision_target, format="JPEG")
+
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    payload = {
+        "folder": str(input_dir),
+        "block": "A",
+        "module": "01",
+        "recursive": True,
+        "extensions": ["jpg", "jpeg", "png", "webp", "heic", "heif"],
+        "normalize_image_names": True,
+        "convert_heic": True,
+        "delete_original_heic": True,
+    }
+
+    preview = client.post("/covers/ingest/plan", json=payload)
+
+    assert preview.status_code == 200
+    plan = preview.json()
+    assert source.exists()
+    assert [action["type"] for action in plan["actions"]] == [
+        "rename",
+        "convert_heic",
+        "delete_original",
+    ]
+    assert [issue["kind"] for issue in plan["issues"]] == [
+        "rename_conflict",
+        "sequence",
+    ]
+    assert plan["summary"]["books_ready"] == 1
+
+    unconfirmed = client.post("/covers/ingest", json=payload)
+    assert unconfirmed.status_code == 400
+    assert source.exists()
+
+    payload["preparation_fingerprint"] = plan["fingerprint"]
+    confirmed = client.post("/covers/ingest", json=payload)
+
+    assert confirmed.status_code == 200
+    result = confirmed.json()
+    assert result["books_detected"] == 1
+    assert result["files_found"] == 4
+    assert result["images_indexed"] == 1
+    assert result["skipped_sequence_books"] == 1
+    assert result["skipped_manual_issue_books"] == 1
+    assert result["preparation"]["failed"] == 0
+    assert not source.exists()
+    assert not (module / "01A0001.heic").exists()
+    assert (module / "01A0001.jpg").is_file()
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        images = con.execute(
+            "SELECT book_id, filename FROM book_image_files"
+        ).fetchall()
+    assert images == [("01A0001", "01A0001.jpg")]
 
 
 def test_manual_form_lifecycle_protects_a_consolidated_book(tmp_path, monkeypatch):
@@ -227,6 +303,200 @@ def test_manual_form_lifecycle_protects_a_consolidated_book(tmp_path, monkeypatc
     )
     assert edited.status_code == 200
     assert edited.json()["book"]["titulo"] == "Ficha corregida"
+
+
+def test_cover_download_remains_available_after_form_consolidation(
+    tmp_path, monkeypatch
+):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    book_id = "01A0003"
+
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        con.execute(
+            """
+            INSERT INTO book_items (id, block, module, seq)
+            VALUES (?, 'A', '01', '0003')
+            """,
+            [book_id],
+        )
+
+    assert client.post(f"/core-books/{book_id}/create").status_code == 200
+    metadata = client.put(
+        f"/books/{book_id}/metadata",
+        json={
+            "metadata": {
+                "isbn": "9788400000000",
+                "google": {
+                    "imageLinks": {
+                        "thumbnail": "https://example.test/cover.jpg",
+                    }
+                },
+                "open_library": {},
+                "isbndb": {},
+            }
+        },
+    )
+    assert metadata.status_code == 200
+
+    consolidated = client.post(f"/core-books/{book_id}/consolidate")
+    assert consolidated.status_code == 200
+    assert consolidated.json()["book"]["form_status"] == "consolidated"
+
+    eligible = client.get(
+        "/workflow/eligible",
+        params={
+            "start_stage": "cover",
+            "overwrite": "false",
+            "block": "A",
+            "module": "01",
+        },
+    )
+    assert eligible.status_code == 200
+    assert eligible.json()["eligible"] == 1
+
+    graph = client.get("/workflow/graph").json()
+    assert graph["stage_order"] == ["ocr", "metadata", "catalog"]
+    assert graph["optional_branches"] == [
+        {
+            "id": "cover",
+            "label": "Cover download",
+            "depends_on": "metadata",
+            "blocks_main_flow": False,
+        }
+    ]
+    assert {
+        "source": "metadata",
+        "target": "cover",
+        "label": "optional branch",
+    } in graph["edges"]
+    assert {"source": "catalog", "target": "cover"} not in graph["edges"]
+
+    covers = importlib.import_module("src.backend.services.covers")
+
+    def fake_download(_url, destination_base, *, timeout):
+        assert timeout > 0
+        path = destination_base.with_suffix(".jpg")
+        path.write_bytes(b"downloaded cover")
+        return path
+
+    monkeypatch.setattr(covers, "_download_one", fake_download)
+
+    downloaded = client.post(
+        "/cover/download",
+        json={
+            "book_id": book_id,
+            "block": "A",
+            "module": "01",
+            "overwrite": False,
+        },
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    payload = downloaded.json()
+    assert payload["branch"] == "cover"
+    assert payload["items"][0]["status"] == "downloaded"
+    assert Path(payload["items"][0]["cover_path"]).is_file()
+
+    after = client.get(f"/books/{book_id}").json()
+    assert after["cover_status"] == "downloaded"
+    assert after["form_status"] == "consolidated"
+    assert after["workflow_status"] == "done"
+    assert after["workflow_current_node"] == "form_consolidated"
+    assert after["pipeline_stage"] == "done"
+
+    still_locked = client.put(
+        f"/core-books/{book_id}",
+        json={"fields": {"titulo": "No debe guardarse"}},
+    )
+    assert still_locked.status_code == 409
+
+    no_longer_pending = client.get(
+        "/workflow/eligible",
+        params={
+            "start_stage": "cover",
+            "overwrite": "false",
+            "block": "A",
+            "module": "01",
+        },
+    )
+    assert no_longer_pending.json()["eligible"] == 0
+
+
+def test_workflow_overwrite_excludes_done_running_and_review_items(
+    tmp_path, monkeypatch
+):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    rows = [
+        ("01A0011", "0011", "pending", "ocr", False, "draft"),
+        ("01A0012", "0012", "pending", "metadata", False, "draft"),
+        ("01A0013", "0013", "error", "catalog", False, "draft"),
+        ("01A0014", "0014", "done", "done", False, "draft"),
+        ("01A0015", "0015", "running", "running:metadata", False, "draft"),
+        ("01A0016", "0016", "review", "review", True, "draft"),
+        ("01A0017", "0017", "done", "done", False, "consolidated"),
+    ]
+    with duckdb.connect(str(tmp_path / "books.duckdb")) as con:
+        con.executemany(
+            """
+            INSERT INTO book_items (
+                id, block, module, seq, workflow_status, pipeline_stage,
+                workflow_needs_review, form_status
+            )
+            VALUES (?, 'A', '01', ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def eligible(stage: str, overwrite: bool) -> int:
+        response = client.get(
+            "/workflow/eligible",
+            params={
+                "start_stage": stage,
+                "overwrite": str(overwrite).lower(),
+                "block": "A",
+                "module": "01",
+            },
+        )
+        assert response.status_code == 200, response.text
+        return int(response.json()["eligible"])
+
+    assert eligible("ocr", False) == 1
+    assert eligible("ocr", True) == 3
+    assert eligible("metadata", False) == 1
+    assert eligible("metadata", True) == 2
+    assert eligible("catalog", True) == 1
+
+    books = importlib.import_module("src.backend.services.books")
+    selected = books.books_for_stage(
+        20,
+        stage="ocr",
+        overwrite=True,
+        block="A",
+        module="01",
+    )
+    assert [item["id"] for item in selected] == [
+        "01A0011",
+        "01A0012",
+        "01A0013",
+    ]
+
+    done_run = client.post(
+        "/workflow/run",
+        json={
+            "book_id": "01A0014",
+            "block": "A",
+            "module": "01",
+            "start_stage": "ocr",
+            "stop_after": "ocr",
+            "overwrite": True,
+        },
+    )
+    assert done_run.status_code == 200, done_run.text
+    item = done_run.json()["items"][0]
+    assert item["status"] == "skipped"
+    assert "Done" in item["reason"]
 
 
 def test_approved_book_without_isbn_can_continue_to_catalog(tmp_path, monkeypatch):
@@ -361,7 +631,7 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
     status = client.get("/snapshots/status")
     assert status.status_code == 200
     assert status.json()["local_db_exists"] is True
-    assert status.json()["schema_version"] == "0003_form_lifecycle"
+    assert status.json()["schema_version"] == "0004_optional_cover_branch"
 
     published = client.post(
         "/snapshots/publish",
@@ -373,7 +643,7 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
     assert snapshot["valid"] is True
     assert snapshot["importable"] is True
     assert snapshot["compatibility"] == "current"
-    assert snapshot["schema_version"] == "0003_form_lifecycle"
+    assert snapshot["schema_version"] == "0004_optional_cover_branch"
 
     listed = client.get("/snapshots")
     assert listed.status_code == 200
@@ -390,5 +660,7 @@ def test_snapshot_endpoints_publish_and_list(tmp_path, monkeypatch):
         json={"snapshot_id": snapshot_id, "confirm": True},
     )
     assert imported.status_code == 200
-    assert imported.json()["migration"]["schema_version"] == "0003_form_lifecycle"
+    assert (
+        imported.json()["migration"]["schema_version"] == "0004_optional_cover_branch"
+    )
     assert imported.json()["restart_required"] is True

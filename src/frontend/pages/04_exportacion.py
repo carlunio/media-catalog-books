@@ -113,11 +113,11 @@ if st.button("Exportar TXT", type="primary", disabled=export_disabled):
             st.session_state.pop("export_last_file_name", None)
             st.session_state.pop("export_last_file_mime", None)
             st.warning(
-                f"El fichero se guardo en el servidor, pero no se pudo preparar la descarga: {exc}"
+                f"El fichero se guardó en el servidor, pero no se pudo preparar la descarga: {exc}"
             )
 
         if path.exists():
-            st.caption(f"Tamano: {path.stat().st_size} bytes")
+            st.caption(f"Tamaño: {path.stat().st_size} bytes")
     except Exception as exc:
         st.error(f"Error exportando TXT: {exc}")
 
@@ -133,9 +133,9 @@ if isinstance(download_bytes, (bytes, bytearray)) and str(download_name or "").s
         key="export_download_button",
     )
 
-st.subheader("Preview de exportación")
+st.subheader("Vista previa de la exportación")
 preview_limit = st.number_input(
-    "Filas maximas", min_value=10, max_value=5000, value=300, step=10
+    "Filas máximas", min_value=10, max_value=5000, value=300, step=10
 )
 
 if prefixes:
@@ -174,4 +174,4 @@ if prefixes:
         else:
             st.info("No hay datos para la selección actual.")
     except Exception as exc:
-        st.error(f"No se pudo cargar la preview: {exc}")
+        st.error(f"No se pudo cargar la vista previa: {exc}")

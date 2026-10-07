@@ -31,6 +31,7 @@ class WorkflowState(TypedDict, total=False):
     stop_after: StageName | None
     action: str | None
     overwrite: bool
+    download_cover_after_metadata: bool
     ocr_provider: str | None
     ocr_model: str | None
     ocr_resize_to_1800: bool
@@ -330,6 +331,28 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
         )
 
     refreshed = books.get_book(book_id)
+    metadata_status = (
+        str((refreshed or {}).get("metadata_status") or "").strip().lower()
+    )
+    if state.get("download_cover_after_metadata", True) and metadata_status in {
+        "fetched",
+        "partial",
+        "manual",
+    }:
+        try:
+            covers.run_one(book_id, overwrite=False)
+        except Exception as exc:
+            try:
+                books.update_cover(
+                    book_id,
+                    cover_path=(refreshed or {}).get("cover_path"),
+                    status="error",
+                    error=str(exc) or exc.__class__.__name__,
+                )
+            except Exception:
+                pass
+        refreshed = books.get_book(book_id)
+
     if _should_stop_after(state, "metadata"):
         return {
             "book": refreshed,
@@ -378,39 +401,6 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
             "book": refreshed,
             "stop_pipeline": True,
             "outcome": "stopped_after_catalog",
-        }
-
-    return {"book": refreshed}
-
-
-def _cover_node(state: WorkflowState) -> WorkflowState:
-    if state.get("failed_step") or state.get("stop_pipeline"):
-        return {}
-
-    if not _stage_enabled(state, "cover"):
-        return {}
-
-    book_id = state["book_id"]
-    books.set_workflow_running(
-        book_id,
-        node="cover",
-        action=_compose_running_action(stage="cover", action=state.get("action")),
-    )
-
-    result = covers.run_one(book_id, overwrite=bool(state.get("overwrite")))
-    if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(
-            book_id,
-            step="cover",
-            error=str(result.get("error") or "Cover download failed"),
-        )
-
-    refreshed = books.get_book(book_id)
-    if _should_stop_after(state, "cover"):
-        return {
-            "book": refreshed,
-            "stop_pipeline": True,
-            "outcome": "stopped_after_cover",
         }
 
     return {"book": refreshed}
@@ -560,7 +550,6 @@ def _build_graph():
     builder.add_node("ocr", _ocr_node)
     builder.add_node("metadata", _metadata_node)
     builder.add_node("catalog", _catalog_node)
-    builder.add_node("cover", _cover_node)
     builder.add_node("evaluate", _evaluate_node)
     builder.add_node("retry", _retry_node)
 
@@ -569,8 +558,7 @@ def _build_graph():
     builder.add_edge("apply_action", "ocr")
     builder.add_edge("ocr", "metadata")
     builder.add_edge("metadata", "catalog")
-    builder.add_edge("catalog", "cover")
-    builder.add_edge("cover", "evaluate")
+    builder.add_edge("catalog", "evaluate")
 
     builder.add_conditional_edges(
         "evaluate",

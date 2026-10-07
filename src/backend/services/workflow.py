@@ -3,7 +3,7 @@ from collections import defaultdict
 from typing import Any
 
 from ..config import WORKFLOW_MAX_ATTEMPTS
-from . import books
+from . import books, covers
 
 VALID_STAGES = {"ocr", "metadata", "catalog", "cover"}
 STAGE_BUCKETS = (
@@ -23,7 +23,13 @@ WORKFLOW_GRAPH_NODES = [
     {"id": "ocr", "label": "OCR", "kind": "stage", "stage": "ocr"},
     {"id": "metadata", "label": "Metadata APIs", "kind": "stage", "stage": "metadata"},
     {"id": "catalog", "label": "Catalog build", "kind": "stage", "stage": "catalog"},
-    {"id": "cover", "label": "Cover download", "kind": "stage", "stage": "cover"},
+    {
+        "id": "cover",
+        "label": "Cover download",
+        "kind": "optional_branch",
+        "stage": "cover",
+    },
+    {"id": "cover_end", "label": "Cover branch end", "kind": "terminal"},
     {"id": "evaluate", "label": "Evaluate", "kind": "control"},
     {"id": "retry", "label": "Retry", "kind": "control"},
     {"id": "end", "label": "End", "kind": "terminal"},
@@ -33,9 +39,10 @@ WORKFLOW_GRAPH_EDGES = [
     {"source": "load_book", "target": "apply_action"},
     {"source": "apply_action", "target": "ocr"},
     {"source": "ocr", "target": "metadata"},
-    {"source": "metadata", "target": "catalog"},
-    {"source": "catalog", "target": "cover"},
-    {"source": "cover", "target": "evaluate"},
+    {"source": "metadata", "target": "catalog", "label": "main flow"},
+    {"source": "catalog", "target": "evaluate"},
+    {"source": "metadata", "target": "cover", "label": "optional branch"},
+    {"source": "cover", "target": "cover_end"},
     {"source": "evaluate", "target": "retry", "label": "route=retry"},
     {"source": "evaluate", "target": "end", "label": "route=end"},
     {"source": "retry", "target": "ocr"},
@@ -79,7 +86,15 @@ def graph_definition() -> dict[str, Any]:
         "langgraph_available": is_langgraph_available(),
         "start_node": "load_book",
         "end_node": "end",
-        "stage_order": ["ocr", "metadata", "catalog", "cover"],
+        "stage_order": ["ocr", "metadata", "catalog"],
+        "optional_branches": [
+            {
+                "id": "cover",
+                "label": "Cover download",
+                "depends_on": "metadata",
+                "blocks_main_flow": False,
+            }
+        ],
         "stage_to_node": WORKFLOW_STAGE_TO_NODE,
         "nodes": WORKFLOW_GRAPH_NODES,
         "edges": WORKFLOW_GRAPH_EDGES,
@@ -158,6 +173,62 @@ def snapshot(
     }
 
 
+REVIEW_RETRY_ACTIONS = {
+    "retry_from_ocr",
+    "retry_from_metadata",
+    "retry_from_catalog",
+}
+
+
+def _main_workflow_ineligible_reason(
+    book: dict[str, Any],
+    *,
+    stage: str,
+    overwrite: bool,
+    allow_review_action: bool = False,
+) -> str | None:
+    form_status = str(book.get("form_status") or "").strip().lower()
+    if form_status == "consolidated":
+        return "La ficha está consolidada y no admite procesos automáticos."
+
+    workflow_status = str(book.get("workflow_status") or "pending").strip().lower()
+    if workflow_status == "done":
+        return (
+            "El workflow ya está en Done y la sobrescritura no reabre "
+            "libros finalizados."
+        )
+    if workflow_status == "running":
+        return "El workflow ya está en ejecución y no se puede iniciar otra vez."
+
+    current_stage = str(book.get("pipeline_stage") or "ocr").strip().lower()
+    needs_review = (
+        bool(book.get("workflow_needs_review"))
+        or workflow_status == "review"
+        or current_stage == "review"
+    )
+    if needs_review:
+        if allow_review_action:
+            return None
+        return (
+            "El libro está pendiente de revisión; debe resolverse desde la cola "
+            "de revisión."
+        )
+
+    eligible_stages = books.eligible_pipeline_stages(stage, overwrite=overwrite)
+    if current_stage in eligible_stages:
+        return None
+
+    if overwrite:
+        return (
+            f"La etapa actual '{current_stage or 'unknown'}' no es elegible para "
+            f"reiniciar desde '{stage}'."
+        )
+    return (
+        f"La etapa actual '{current_stage or 'unknown'}' no coincide con "
+        f"'{stage}' y la sobrescritura está desactivada."
+    )
+
+
 def run_one(
     book_id: str,
     *,
@@ -165,6 +236,7 @@ def run_one(
     stop_after: str | None = None,
     action: str | None = None,
     overwrite: bool = False,
+    download_cover_after_metadata: bool = True,
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
@@ -178,11 +250,21 @@ def run_one(
     book = books.get_book(book_id)
     if book is None:
         return {"id": book_id, "status": "error", "error": "Book not found"}
-    if str(book.get("form_status") or "").strip().lower() == "consolidated":
+    if stage == "cover":
+        return run_cover_one(book_id, overwrite=overwrite)
+
+    normalized_action = str(action or "").strip().lower()
+    ineligible_reason = _main_workflow_ineligible_reason(
+        book,
+        stage=stage,
+        overwrite=overwrite,
+        allow_review_action=normalized_action in REVIEW_RETRY_ACTIONS,
+    )
+    if ineligible_reason:
         return {
             "id": book_id,
             "status": "skipped",
-            "reason": "La ficha está consolidada y no admite procesos automáticos.",
+            "reason": ineligible_reason,
         }
 
     result_state = _invoke_graph(
@@ -192,6 +274,7 @@ def run_one(
             "stop_after": stop,
             "action": action,
             "overwrite": overwrite,
+            "download_cover_after_metadata": bool(download_cover_after_metadata),
             "max_attempts": int(max_attempts),
             "ocr_provider": ocr_provider,
             "ocr_model": ocr_model,
@@ -226,6 +309,15 @@ def run_one(
     elif result_state.get("outcome") == "partial":
         status = "partial"
 
+    metadata_payload = (
+        book.get("metadata") if isinstance(book.get("metadata"), dict) else {}
+    )
+    provider_statuses = (
+        metadata_payload.get("provider_statuses")
+        if isinstance(metadata_payload.get("provider_statuses"), dict)
+        else {}
+    )
+
     return {
         "id": book_id,
         "status": status,
@@ -238,12 +330,121 @@ def run_one(
         "error": error,
         "ocr_status": book.get("ocr_status"),
         "metadata_status": book.get("metadata_status"),
+        "google_status": provider_statuses.get("google"),
+        "openlibrary_status": provider_statuses.get("open_library"),
+        "isbndb_status": provider_statuses.get("isbndb"),
         "catalog_status": book.get("catalog_status"),
         "cover_status": book.get("cover_status"),
         "ocr_provider": book.get("ocr_provider"),
         "ocr_model": book.get("ocr_model"),
         "outcome": result_state.get("outcome"),
     }
+
+
+def run_cover_one(book_id: str, *, overwrite: bool = False) -> dict[str, Any]:
+    """Run the optional cover branch without changing the main workflow state."""
+    book = books.get_book(book_id)
+    if book is None:
+        return {"id": book_id, "status": "error", "error": "Book not found"}
+
+    metadata_status = str(book.get("metadata_status") or "").strip().lower()
+    if metadata_status not in {"fetched", "partial", "manual"}:
+        return {
+            "id": book_id,
+            "status": "skipped",
+            "reason": "API metadata must be fetched before downloading a cover",
+        }
+
+    result = covers.run_one(book_id, overwrite=overwrite)
+    return result if isinstance(result, dict) else {"id": book_id, "status": "error"}
+
+
+def _book_ids_missing_cover_files(
+    *,
+    block: str,
+    module: str,
+    limit: int | None,
+) -> list[str]:
+    candidate_count = books.count_books_for_cover_download(
+        overwrite=True,
+        block=block,
+        module=module,
+    )
+    if candidate_count <= 0:
+        return []
+
+    candidates = books.book_ids_for_cover_download(
+        limit=candidate_count,
+        overwrite=True,
+        block=block,
+        module=module,
+    )
+    missing = [
+        book_id for book_id in candidates if covers.existing_cover_file(book_id) is None
+    ]
+    return missing if limit is None else missing[: max(0, int(limit))]
+
+
+def run_cover_batch(
+    *,
+    book_id: str | None = None,
+    block: str | None = None,
+    module: str | None = None,
+    limit: int | None = 20,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Run the optional cover branch, including consolidated books."""
+    scope_block, scope_module = books.resolve_scope(block, module, require=True)
+
+    if book_id:
+        targets = [book_id]
+    elif overwrite:
+        requested_limit = 20 if limit is None else int(limit)
+        targets = books.book_ids_for_cover_download(
+            limit=requested_limit,
+            overwrite=True,
+            block=scope_block,
+            module=scope_module,
+        )
+    else:
+        targets = _book_ids_missing_cover_files(
+            block=scope_block,
+            module=scope_module,
+            limit=limit,
+        )
+
+    items: list[dict[str, Any]] = []
+    for target_id in targets:
+        try:
+            result = run_cover_one(target_id, overwrite=overwrite)
+        except Exception as exc:
+            result = {
+                "id": target_id,
+                "status": "error",
+                "error": str(exc) or exc.__class__.__name__,
+            }
+        items.append(result)
+
+    return {
+        "scope": {"block": scope_block, "module": scope_module},
+        "branch": "cover",
+        "requested": len(targets),
+        "processed": len(items),
+        "items": items,
+    }
+
+
+_MAIN_STAGE_ORDER = {"ocr": 1, "metadata": 2, "catalog": 3, "cover": 4}
+
+
+def _stage_range_includes_metadata(*, start_stage: str, stop_after: str | None) -> bool:
+    start_index = _MAIN_STAGE_ORDER[start_stage]
+    stop_index = (
+        _MAIN_STAGE_ORDER[stop_after]
+        if stop_after is not None
+        else _MAIN_STAGE_ORDER["catalog"]
+    )
+    return start_index <= _MAIN_STAGE_ORDER["metadata"] <= stop_index
 
 
 def run_batch(
@@ -256,6 +457,7 @@ def run_batch(
     stop_after: str | None = None,
     action: str | None = None,
     overwrite: bool = False,
+    download_cover_after_metadata: bool = True,
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
@@ -265,6 +467,17 @@ def run_batch(
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
+
+    if stage == "cover":
+        if stop not in {None, "cover"}:
+            raise ValueError("The cover branch can only stop after 'cover'")
+        return run_cover_batch(
+            book_id=book_id,
+            block=block,
+            module=module,
+            limit=limit,
+            overwrite=overwrite,
+        )
 
     scope_block, scope_module = books.resolve_scope(block, module, require=True)
 
@@ -288,25 +501,6 @@ def run_batch(
                 f"(book scope is {target_block}/{target_module})"
             )
 
-        if not overwrite:
-            current_stage = str(target_book.get("pipeline_stage") or "").strip().lower()
-            if current_stage != stage:
-                return {
-                    "scope": {"block": scope_block, "module": scope_module},
-                    "requested": 1,
-                    "processed": 1,
-                    "items": [
-                        {
-                            "id": book_id,
-                            "status": "skipped",
-                            "reason": (
-                                f"Book stage '{current_stage or 'unknown'}' does not match "
-                                f"start_stage '{stage}' with overwrite disabled"
-                            ),
-                        }
-                    ],
-                }
-
         targets = [book_id]
     else:
         targets = books.book_ids_for_workflow(
@@ -319,13 +513,14 @@ def run_batch(
 
     items: list[dict[str, Any]] = []
     for target_id in targets:
-        items.append(
-            run_one(
+        try:
+            result = run_one(
                 target_id,
                 start_stage=stage,
                 stop_after=stop,
                 action=action,
                 overwrite=overwrite,
+                download_cover_after_metadata=download_cover_after_metadata,
                 max_attempts=max_attempts,
                 ocr_provider=ocr_provider,
                 ocr_model=ocr_model,
@@ -333,6 +528,35 @@ def run_batch(
                 catalog_provider=catalog_provider,
                 catalog_model=catalog_model,
             )
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            try:
+                books.set_workflow_review(
+                    target_id,
+                    node=stage,
+                    reason=f"{stage}: {error}",
+                    error=error,
+                )
+            except Exception:
+                pass
+            result = {
+                "id": target_id,
+                "status": "error",
+                "failed_step": stage,
+                "error": error,
+            }
+        items.append(result)
+
+    cover_sweep = None
+    if download_cover_after_metadata and _stage_range_includes_metadata(
+        start_stage=stage,
+        stop_after=stop,
+    ):
+        cover_sweep = run_cover_batch(
+            block=scope_block,
+            module=scope_module,
+            limit=None,
+            overwrite=False,
         )
 
     return {
@@ -340,6 +564,7 @@ def run_batch(
         "requested": len(targets),
         "processed": len(items),
         "items": items,
+        "cover_sweep": cover_sweep,
     }
 
 
@@ -352,12 +577,28 @@ def eligible_count(
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     scope_block, scope_module = books.resolve_scope(block, module, require=True)
-    eligible = books.count_books_for_stage(
-        stage=stage,
-        overwrite=overwrite,
-        block=scope_block,
-        module=scope_module,
-    )
+    if stage == "cover":
+        if overwrite:
+            eligible = books.count_books_for_cover_download(
+                overwrite=True,
+                block=scope_block,
+                module=scope_module,
+            )
+        else:
+            eligible = len(
+                _book_ids_missing_cover_files(
+                    block=scope_block,
+                    module=scope_module,
+                    limit=None,
+                )
+            )
+    else:
+        eligible = books.count_books_for_stage(
+            stage=stage,
+            overwrite=overwrite,
+            block=scope_block,
+            module=scope_module,
+        )
     return {
         "scope": {"block": scope_block, "module": scope_module},
         "start_stage": stage,
@@ -502,6 +743,7 @@ def review_action(
     book_id: str,
     *,
     action: str,
+    download_cover_after_metadata: bool = True,
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
@@ -530,6 +772,7 @@ def review_action(
         stop_after=None,
         action=normalized,
         overwrite=True,
+        download_cover_after_metadata=download_cover_after_metadata,
         max_attempts=max_attempts,
         ocr_provider=ocr_provider,
         ocr_model=ocr_model,

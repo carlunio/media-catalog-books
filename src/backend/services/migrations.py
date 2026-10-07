@@ -16,6 +16,7 @@ from ..migrations.versions import (
     v0001_baseline,
     v0002_v0_1_1,
     v0003_form_lifecycle,
+    v0004_optional_cover_branch,
 )
 
 MIGRATIONS_TABLE = "schema_migrations"
@@ -59,6 +60,12 @@ MIGRATIONS: tuple[Migration, ...] = (
         name="Añade borrador, consolidación y aceptación de libros sin ISBN",
         handler=v0003_form_lifecycle.apply,
         source_path=Path(v0003_form_lifecycle.__file__).resolve(),
+    ),
+    Migration(
+        version="0004_optional_cover_branch",
+        name="Separa la descarga opcional de portadas del workflow principal",
+        handler=v0004_optional_cover_branch.apply,
+        source_path=Path(v0004_optional_cover_branch.__file__).resolve(),
     ),
 )
 

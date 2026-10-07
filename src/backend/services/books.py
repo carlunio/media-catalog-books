@@ -6,9 +6,17 @@ from typing import Any
 
 from ..config import DEFAULT_COVERS_DIR
 from ..database import get_connection
-from ..normalizers import extract_book_id_from_path, normalize_book_id, split_book_id
+from ..normalizers import normalize_book_id, split_book_id
+from .input_preparation import (
+    HEIF_EXTENSIONS,
+    apply_preparation_plan,
+    build_preparation_plan,
+    image_identity,
+    sequence_warnings,
+)
 
 STAGES = ("ocr", "metadata", "catalog", "cover")
+MAIN_WORKFLOW_STAGES = ("ocr", "metadata", "catalog")
 PAYLOAD_TYPES = {"catalog", "ocr_trace"}
 VALID_BLOCKS = ("A", "B", "C")
 MODULE_DIR_PATTERN = re.compile(r"^\d{2}$")
@@ -148,7 +156,7 @@ def _load_json(value: Any, default: Any) -> Any:
 
 def _normalize_extensions(extensions: list[str] | None = None) -> set[str]:
     if not extensions:
-        extensions = [".jpg", ".jpeg", ".png", ".webp", ".heic"]
+        extensions = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]
     normalized: set[str] = set()
     for ext in extensions:
         text = str(ext).strip().lower()
@@ -439,6 +447,11 @@ def _empty_metadata(book_id: str, isbn: str | None = None) -> dict[str, Any]:
         "google": {},
         "open_library": {},
         "isbndb": {},
+        "provider_statuses": {
+            "google": "not_fetched",
+            "open_library": "not_fetched",
+            "isbndb": "not_fetched",
+        },
         "errors": {},
     }
 
@@ -460,7 +473,16 @@ def _metadata_from_rows(book_id: str, rows: list[tuple[Any, ...]]) -> dict[str, 
         if isbn and not metadata.get("isbn"):
             metadata["isbn"] = isbn
 
-        provider_error = str(row[3] or "").strip()
+        provider_status = str(row[3] or "").strip().lower()
+        if not provider_status:
+            provider_status = "fetched" if payload else "empty"
+        provider_statuses = metadata.get("provider_statuses")
+        if isinstance(provider_statuses, dict):
+            provider_statuses[source_key] = provider_status
+        else:
+            metadata["provider_statuses"] = {source_key: provider_status}
+
+        provider_error = str(row[4] or "").strip()
         if provider_error:
             errors = metadata.get("errors")
             if isinstance(errors, dict):
@@ -468,7 +490,7 @@ def _metadata_from_rows(book_id: str, rows: list[tuple[Any, ...]]) -> dict[str, 
             else:
                 metadata["errors"] = {source_key: provider_error}
 
-        fetched_at = str(row[4] or "").strip()
+        fetched_at = str(row[5] or "").strip()
         if fetched_at:
             fetched_values.append(fetched_at)
 
@@ -482,7 +504,8 @@ def _load_metadata_from_sources(book_id: str) -> dict[str, Any]:
     with get_connection() as con:
         rows = con.execute(
             """
-            SELECT provider, payload_json, isbn, provider_error, fetched_at
+            SELECT provider, payload_json, isbn, provider_status,
+                   provider_error, fetched_at
             FROM book_bibliographic_sources
             WHERE book_id = ?
             ORDER BY provider
@@ -502,8 +525,8 @@ def _fetch_metadata_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
 
     placeholders = ", ".join(["?"] * len(book_ids))
     query = (
-        "SELECT book_id, provider, payload_json, isbn, provider_error, fetched_at "
-        "FROM book_bibliographic_sources "
+        "SELECT book_id, provider, payload_json, isbn, provider_status, "
+        "provider_error, fetched_at FROM book_bibliographic_sources "
         f"WHERE book_id IN ({placeholders}) "
         "ORDER BY book_id, provider"
     )
@@ -516,7 +539,9 @@ def _fetch_metadata_map(book_ids: list[str]) -> dict[str, dict[str, Any]]:
         book_id = str(row[0] or "").strip()
         if not book_id:
             continue
-        grouped.setdefault(book_id, []).append((row[1], row[2], row[3], row[4], row[5]))
+        grouped.setdefault(book_id, []).append(
+            (row[1], row[2], row[3], row[4], row[5], row[6])
+        )
 
     return {
         book_id: _metadata_from_rows(book_id, grouped_rows)
@@ -918,13 +943,9 @@ def _derive_pipeline_stage_from_dict(book: dict[str, Any]) -> str:
     if workflow_status == "running":
         return f"running:{current_node}" if current_node else "running"
 
-    cover_status = str(book.get("cover_status") or "").strip().lower()
-    if cover_status in {"downloaded", "missing", "skipped"}:
-        return "done"
-
     catalog_status = str(book.get("catalog_status") or "").strip().lower()
     if catalog_status in {"built", "partial", "manual"}:
-        return "cover"
+        return "done"
 
     metadata_status = str(book.get("metadata_status") or "").strip().lower()
     if metadata_status in {"fetched", "partial", "skipped", "manual"}:
@@ -1215,19 +1236,10 @@ def _image_files(folder: Path, recursive: bool, extensions: set[str]) -> list[Pa
     return sorted(files)
 
 
-def ingest_covers(
-    folder: str | Path,
-    *,
-    recursive: bool = True,
-    extensions: list[str] | None = None,
-    overwrite_existing_paths: bool = False,
-    block: str | None = None,
-    module: str | None = None,
-) -> dict[str, Any]:
-    base = _resolve_covers_dir(folder)
+def _select_ingest_modules(
+    base: Path, *, block: str | None, module: str | None
+) -> tuple[str | None, str | None, list[tuple[str, str, Path]]]:
     scope_block, scope_module = resolve_scope(block, module, require=False)
-    valid_ext = _normalize_extensions(extensions)
-
     modules = _iter_modules_from_structure(base)
     if scope_block and scope_module:
         modules = [
@@ -1239,31 +1251,231 @@ def ingest_covers(
             raise ValueError(
                 f"Module not found in folder structure: {scope_block}/{scope_module}"
             )
+    return scope_block, scope_module, modules
 
-    grouped: dict[str, list[str]] = {}
+
+def _module_preparation_plans(
+    modules: list[tuple[str, str, Path]],
+    *,
+    recursive: bool,
+    extensions: set[str],
+    normalize_image_names: bool,
+    convert_heic: bool,
+    delete_original_heic: bool,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        (
+            module_block,
+            module_name,
+            build_preparation_plan(
+                module_path,
+                recursive=recursive,
+                extensions=extensions,
+                normalize_names=normalize_image_names,
+                convert_heic=convert_heic,
+                delete_original_heic=delete_original_heic,
+                expected_block=module_block,
+                expected_module=module_name,
+            ),
+        )
+        for module_block, module_name, module_path in modules
+    ]
+
+
+def _combined_preparation_fingerprint(
+    plans: list[tuple[str, str, dict[str, Any]]],
+) -> str:
+    return "|".join(
+        f"{block}/{module}:{plan['fingerprint']}" for block, module, plan in plans
+    )
+
+
+def _public_preparation_plan(
+    base: Path,
+    plans: list[tuple[str, str, dict[str, Any]]],
+) -> dict[str, Any]:
+    actions: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    ready_books: set[str] = set()
+    summary = {
+        "files_inspected": 0,
+        "files_ready": 0,
+        "books_ready": 0,
+        "renames": 0,
+        "conversions": 0,
+        "deletions": 0,
+        "manual_corrections": 0,
+    }
+    for block, module, plan in plans:
+        prefix = Path(block) / module
+        for action in plan["actions"]:
+            public_action = dict(action)
+            public_action["source"] = str(prefix / action["source"])
+            public_action["destination"] = str(prefix / action["destination"])
+            actions.append(public_action)
+        for issue in plan["issues"]:
+            public_issue = dict(issue)
+            public_issue["file"] = str(prefix / issue["file"])
+            issues.append(public_issue)
+        for image in plan["ready_images"]:
+            parts = split_book_id(str(image["book_id"]))
+            if parts is None:
+                continue
+            image_module, image_block, _sequence = parts
+            if image_block != block or image_module != module:
+                issues.append(
+                    {
+                        "kind": "scope_mismatch",
+                        "file": str(prefix / image["path"]),
+                        "message": (
+                            f"El nombre identifica el módulo {image_block}/{image_module}, "
+                            f"pero el archivo está en {block}/{module}. Muévelo o corrige "
+                            "el nombre a mano."
+                        ),
+                    }
+                )
+                continue
+            summary["files_ready"] += 1
+            ready_books.add(str(image["book_id"]))
+        for key in ("files_inspected", "renames", "conversions", "deletions"):
+            summary[key] += int(plan["summary"].get(key, 0))
+
+    summary["books_ready"] = len(ready_books)
+    summary["manual_corrections"] = len(issues)
+
+    return {
+        "folder": str(base),
+        "modules_scanned": [f"{block}/{module}" for block, module, _plan in plans],
+        "fingerprint": _combined_preparation_fingerprint(plans),
+        "actions": actions,
+        "issues": issues,
+        "summary": summary,
+    }
+
+
+def plan_ingest_covers(
+    folder: str | Path,
+    *,
+    recursive: bool = True,
+    extensions: list[str] | None = None,
+    normalize_image_names: bool = True,
+    convert_heic: bool = True,
+    delete_original_heic: bool = False,
+    block: str | None = None,
+    module: str | None = None,
+) -> dict[str, Any]:
+    base = _resolve_covers_dir(folder)
+    _scope_block, _scope_module, modules = _select_ingest_modules(
+        base, block=block, module=module
+    )
+    plans = _module_preparation_plans(
+        modules,
+        recursive=recursive,
+        extensions=_normalize_extensions(extensions),
+        normalize_image_names=normalize_image_names,
+        convert_heic=convert_heic,
+        delete_original_heic=delete_original_heic,
+    )
+    return _public_preparation_plan(base, plans)
+
+
+def ingest_covers(
+    folder: str | Path,
+    *,
+    recursive: bool = True,
+    extensions: list[str] | None = None,
+    overwrite_existing_paths: bool = False,
+    normalize_image_names: bool = True,
+    convert_heic: bool = True,
+    delete_original_heic: bool = False,
+    preparation_fingerprint: str | None = None,
+    block: str | None = None,
+    module: str | None = None,
+) -> dict[str, Any]:
+    base = _resolve_covers_dir(folder)
+    scope_block, scope_module, modules = _select_ingest_modules(
+        base, block=block, module=module
+    )
+    valid_ext = _normalize_extensions(extensions)
+    plans = _module_preparation_plans(
+        modules,
+        recursive=recursive,
+        extensions=valid_ext,
+        normalize_image_names=normalize_image_names,
+        convert_heic=convert_heic,
+        delete_original_heic=delete_original_heic,
+    )
+    public_plan = _public_preparation_plan(base, plans)
+    current_fingerprint = str(public_plan["fingerprint"])
+    if preparation_fingerprint is None:
+        raise ValueError("Analiza el módulo y confirma el plan antes de extraer.")
+    if preparation_fingerprint != current_fingerprint:
+        raise ValueError(
+            "La carpeta de entrada ha cambiado desde el análisis. Analízala de nuevo "
+            "antes de confirmar."
+        )
+
+    preparation: dict[str, Any] = {
+        "renamed": 0,
+        "heic_converted": 0,
+        "heic_originals_deleted": 0,
+        "failed": 0,
+        "failed_book_ids": [],
+        "failure_examples": [],
+        "issues": public_plan["issues"],
+        "fingerprint": current_fingerprint,
+    }
+    if preparation_fingerprint is not None:
+        for _module_block, _module_name, plan in plans:
+            applied = apply_preparation_plan(plan)
+            for key in (
+                "renamed",
+                "heic_converted",
+                "heic_originals_deleted",
+                "failed",
+            ):
+                preparation[key] += int(applied[key])
+            preparation["failed_book_ids"] = sorted(
+                set(preparation["failed_book_ids"]) | set(applied["failed_book_ids"])
+            )
+            remaining = max(0, 30 - len(preparation["failure_examples"]))
+            preparation["failure_examples"].extend(
+                applied["failure_examples"][:remaining]
+            )
+
+    effective_extensions = set(valid_ext)
+    if convert_heic:
+        effective_extensions -= HEIF_EXTENSIONS
+        effective_extensions.update({".jpg", ".jpeg"})
+
+    grouped: dict[str, list[tuple[int, str]]] = {}
     skipped_invalid = 0
     skipped_invalid_examples: list[str] = []
     skipped_scope_mismatch = 0
     skipped_scope_mismatch_examples: list[str] = []
     files_found = 0
+    scanned_paths: list[Path] = []
 
     for module_block, module_name, module_path in modules:
-        files = _image_files(module_path, recursive=recursive, extensions=valid_ext)
+        files = _image_files(
+            module_path, recursive=recursive, extensions=effective_extensions
+        )
         files_found += len(files)
+        scanned_paths.extend(files)
 
         for file_path in files:
-            book_id = extract_book_id_from_path(file_path)
-            if not book_id:
+            identity = image_identity(
+                file_path, require_canonical=normalize_image_names
+            )
+            if identity is None:
                 skipped_invalid += 1
                 if len(skipped_invalid_examples) < 30:
                     skipped_invalid_examples.append(str(file_path.relative_to(base)))
                 continue
 
+            book_id, position, _canonical_stem = identity
             parts = split_book_id(book_id)
-            if parts is None:
-                skipped_invalid += 1
-                if len(skipped_invalid_examples) < 30:
-                    skipped_invalid_examples.append(str(file_path.relative_to(base)))
+            if parts is None:  # pragma: no cover - guarded by image_identity
                 continue
 
             id_module, id_block, _ = parts
@@ -1275,19 +1487,39 @@ def ingest_covers(
                     )
                 continue
 
-            grouped.setdefault(book_id, []).append(str(file_path))
+            grouped.setdefault(book_id, []).append((position, str(file_path)))
+
+    filename_warnings = sequence_warnings(
+        scanned_paths, base=base, require_canonical=normalize_image_names
+    )
+    blocked_sequence_ids = {str(warning["book_id"]) for warning in filename_warnings}
+    blocked_issue_ids = {
+        str(book_id)
+        for _block, _module, plan in plans
+        for book_id in plan["blocked_book_ids"]
+    } | set(preparation["failed_book_ids"])
+    skipped_sequence_books = len(blocked_sequence_ids.intersection(grouped))
+    skipped_manual_issue_books = len(
+        (blocked_issue_ids - blocked_sequence_ids).intersection(grouped)
+    )
+    for book_id in blocked_sequence_ids | blocked_issue_ids:
+        grouped.pop(book_id, None)
 
     inserted = 0
     updated = 0
     grouped_filenames: dict[str, list[str]] = {}
-    for book_id, image_paths in grouped.items():
-        filenames = sorted(
-            {
-                _image_filename(path)
-                for path in image_paths
-                if str(path).strip() and _image_filename(path)
-            }
-        )
+    for book_id, positioned_paths in grouped.items():
+        filenames = [
+            filename
+            for _position, filename in sorted(
+                {
+                    (position, _image_filename(path))
+                    for position, path in positioned_paths
+                    if str(path).strip() and _image_filename(path)
+                },
+                key=lambda item: (item[0], item[1]),
+            )
+        ]
         if filenames:
             grouped_filenames[book_id] = filenames
 
@@ -1363,10 +1595,32 @@ def ingest_covers(
             for name in existing_images.get(book_id, [])
             if str(name).strip()
         ]
+        if normalize_image_names:
+            previous_filenames = [
+                name
+                for name in previous_filenames
+                if image_identity(name, require_canonical=True) is not None
+            ]
+        if convert_heic:
+            previous_filenames = [
+                name
+                for name in previous_filenames
+                if Path(name).suffix.lower() not in HEIF_EXTENSIONS
+            ]
         if overwrite_existing_paths:
             merged_filenames = filenames
         else:
-            merged_filenames = sorted(set(previous_filenames) | set(filenames))
+            merged_filenames = sorted(
+                set(previous_filenames) | set(filenames),
+                key=lambda name: (
+                    (
+                        image_identity(name)[1]
+                        if image_identity(name) is not None
+                        else 1_000_000
+                    ),
+                    name,
+                ),
+            )
 
         if merged_filenames != previous_filenames:
             replace_image_for_books.append(book_id)
@@ -1409,9 +1663,14 @@ def ingest_covers(
         "scope_module": scope_module,
         "modules_scanned": [f"{item[0]}/{item[1]}" for item in modules],
         "files_found": files_found,
+        "images_indexed": sum(len(filenames) for filenames in grouped.values()),
         "books_detected": len(grouped),
         "inserted": inserted,
         "updated": updated,
+        "preparation": preparation,
+        "filename_warnings": filename_warnings,
+        "skipped_sequence_books": skipped_sequence_books,
+        "skipped_manual_issue_books": skipped_manual_issue_books,
         "skipped_invalid": skipped_invalid,
         "skipped_invalid_examples": skipped_invalid_examples,
         "skipped_scope_mismatch": skipped_scope_mismatch,
@@ -1526,23 +1785,32 @@ def update_cover(
     refresh_pipeline_stage(book_id)
 
 
-def books_for_stage(
-    limit: int,
-    *,
-    stage: str,
-    overwrite: bool,
-    block: str | None = None,
-    module: str | None = None,
-) -> list[dict[str, Any]]:
+def eligible_pipeline_stages(stage: str, *, overwrite: bool) -> tuple[str, ...]:
     normalized_stage = str(stage or "").strip().lower()
     if normalized_stage not in STAGES:
         raise ValueError(f"Invalid stage: {stage}")
 
+    if not overwrite or normalized_stage not in MAIN_WORKFLOW_STAGES:
+        return (normalized_stage,)
+
+    start_index = MAIN_WORKFLOW_STAGES.index(normalized_stage)
+    return MAIN_WORKFLOW_STAGES[start_index:]
+
+
+def _workflow_stage_where(
+    *,
+    stage: str,
+    overwrite: bool,
+    block: str | None,
+    module: str | None,
+) -> tuple[list[str], list[Any]]:
     scope_block, scope_module = resolve_scope(block, module, require=False)
+    stages = eligible_pipeline_stages(stage, overwrite=overwrite)
 
     where = [
-        "workflow_needs_review = FALSE",
+        "COALESCE(workflow_needs_review, FALSE) = FALSE",
         "COALESCE(form_status, 'not_started') <> 'consolidated'",
+        "lower(COALESCE(workflow_status, 'pending')) NOT IN ('done', 'running')",
     ]
     params: list[Any] = []
 
@@ -1553,15 +1821,28 @@ def books_for_stage(
         where.append("module = ?")
         params.append(scope_module)
 
-    if not overwrite:
-        # Strict mode for batched workflow runs:
-        # only books exactly in the requested orchestration stage are eligible.
-        where.append("pipeline_stage = ?")
-        params.append(normalized_stage)
+    placeholders = ", ".join("?" for _ in stages)
+    where.append(f"lower(COALESCE(pipeline_stage, 'ocr')) IN ({placeholders})")
+    params.extend(stages)
+    return where, params
 
-    sql = "SELECT id FROM book_items"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+
+def books_for_stage(
+    limit: int,
+    *,
+    stage: str,
+    overwrite: bool,
+    block: str | None = None,
+    module: str | None = None,
+) -> list[dict[str, Any]]:
+    where, params = _workflow_stage_where(
+        stage=stage,
+        overwrite=overwrite,
+        block=block,
+        module=module,
+    )
+
+    sql = "SELECT id FROM book_items WHERE " + " AND ".join(where)
     sql += " ORDER BY id LIMIT ?"
     params.append(int(limit))
 
@@ -1579,32 +1860,13 @@ def count_books_for_stage(
     block: str | None = None,
     module: str | None = None,
 ) -> int:
-    normalized_stage = str(stage or "").strip().lower()
-    if normalized_stage not in STAGES:
-        raise ValueError(f"Invalid stage: {stage}")
-
-    scope_block, scope_module = resolve_scope(block, module, require=False)
-
-    where = [
-        "workflow_needs_review = FALSE",
-        "COALESCE(form_status, 'not_started') <> 'consolidated'",
-    ]
-    params: list[Any] = []
-
-    if scope_block:
-        where.append("block = ?")
-        params.append(scope_block)
-    if scope_module:
-        where.append("module = ?")
-        params.append(scope_module)
-
-    if not overwrite:
-        where.append("pipeline_stage = ?")
-        params.append(normalized_stage)
-
-    sql = "SELECT COUNT(*) FROM book_items"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    where, params = _workflow_stage_where(
+        stage=stage,
+        overwrite=overwrite,
+        block=block,
+        module=module,
+    )
+    sql = "SELECT COUNT(*) FROM book_items WHERE " + " AND ".join(where)
 
     with get_connection() as con:
         row = con.execute(sql, params).fetchone()
@@ -1628,6 +1890,70 @@ def book_ids_for_workflow(
         module=module,
     )
     return [str(row.get("id")) for row in rows if str(row.get("id") or "").strip()]
+
+
+def _cover_download_where(
+    *,
+    overwrite: bool,
+    block: str | None,
+    module: str | None,
+) -> tuple[list[str], list[Any]]:
+    scope_block, scope_module = resolve_scope(block, module, require=False)
+    where = [
+        "COALESCE(metadata_status, '') IN ('fetched', 'partial', 'manual')",
+    ]
+    params: list[Any] = []
+
+    if scope_block:
+        where.append("block = ?")
+        params.append(scope_block)
+    if scope_module:
+        where.append("module = ?")
+        params.append(scope_module)
+    if not overwrite:
+        where.append(
+            "COALESCE(cover_status, '') NOT IN ('downloaded', 'missing', 'skipped')"
+        )
+
+    return where, params
+
+
+def book_ids_for_cover_download(
+    *,
+    limit: int,
+    overwrite: bool,
+    block: str | None = None,
+    module: str | None = None,
+) -> list[str]:
+    where, params = _cover_download_where(
+        overwrite=overwrite,
+        block=block,
+        module=module,
+    )
+    sql = "SELECT id FROM book_items WHERE " + " AND ".join(where)
+    sql += " ORDER BY id LIMIT ?"
+    params.append(int(limit))
+
+    with get_connection() as con:
+        rows = con.execute(sql, params).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def count_books_for_cover_download(
+    *,
+    overwrite: bool,
+    block: str | None = None,
+    module: str | None = None,
+) -> int:
+    where, params = _cover_download_where(
+        overwrite=overwrite,
+        block=block,
+        module=module,
+    )
+    sql = "SELECT COUNT(*) FROM book_items WHERE " + " AND ".join(where)
+    with get_connection() as con:
+        row = con.execute(sql, params).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _json_safe_db_value(value: Any) -> Any:
@@ -2548,7 +2874,8 @@ def get_stats(*, block: str | None = None, module: str | None = None) -> dict[st
             con.execute(
                 _append_scope_where(
                     "SELECT COUNT(*) FROM book_items "
-                    "WHERE COALESCE(form_status, 'not_started') <> 'consolidated' "
+                    "WHERE COALESCE(metadata_status, '') "
+                    "IN ('fetched', 'partial', 'manual') "
                     "AND COALESCE(cover_status, '') "
                     "NOT IN ('downloaded', 'missing', 'skipped')",
                     scope_where,

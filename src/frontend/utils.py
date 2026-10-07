@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 APP_META = get_app_meta()
-WORKFLOW_STAGES = ("ocr", "metadata", "catalog", "cover")
+WORKFLOW_STAGES = ("ocr", "metadata", "catalog")
 BLOCK_OPTIONS = ("A", "B", "C")
 MODULE_NAME_PATTERN = re.compile(r"^\d{2}$")
 
@@ -77,7 +77,7 @@ OCR_OLLAMA_MODEL_DEFAULT = str(
     os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest") or "glm-ocr:latest"
 ).strip()
 OCR_RESIZE_TO_1800_DEFAULT = _as_bool(
-    os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), fallback=True
+    os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), fallback=False
 )
 
 CATALOG_PROVIDER_DEFAULT = _normalize_provider(
@@ -424,10 +424,10 @@ def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
             continue
         title = (
             str((row.get("catalog") or {}).get("titulo") or "").strip()
-            or "(sin titulo)"
+            or "(sin título)"
         )
         stage = str(row.get("pipeline_stage") or "unknown")
-        review = " | review" if bool(row.get("workflow_needs_review")) else ""
+        review = " | revisión" if bool(row.get("workflow_needs_review")) else ""
         block = str(row.get("block") or "").strip()
         module = str(row.get("module") or "").strip()
         scope = f"{block}/{module}" if block and module else "--"

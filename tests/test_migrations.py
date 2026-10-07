@@ -52,11 +52,48 @@ def test_migrations_are_incremental_and_idempotent(tmp_path, monkeypatch):
         "0001_baseline",
         "0002_v0_1_1",
         "0003_form_lifecycle",
+        "0004_optional_cover_branch",
     ]
-    assert first["schema_version"] == "0003_form_lifecycle"
+    assert first["schema_version"] == "0004_optional_cover_branch"
     assert second["applied_now"] == []
     assert second["pending_count"] == 0
     assert all(item["checksum_state"] == "current" for item in second["migrations"])
+
+
+def test_optional_cover_branch_migrates_cataloged_items_out_of_cover_stage(
+    tmp_path, monkeypatch
+):
+    migrations, database_path = _load_migrations(tmp_path, monkeypatch)
+    all_migrations = migrations.MIGRATIONS
+    monkeypatch.setattr(migrations, "MIGRATIONS", all_migrations[:-1])
+    migrations.migrate()
+
+    with duckdb.connect(str(database_path)) as con:
+        con.execute("""
+            INSERT INTO book_items (
+                id, block, module, seq, catalog_status, cover_status,
+                workflow_status, workflow_current_node, workflow_action,
+                workflow_needs_review, pipeline_stage, form_status
+            )
+            VALUES (
+                '01A0001', 'A', '01', '0001', 'built', NULL,
+                'pending', 'stage:catalog', 'legacy action',
+                FALSE, 'cover', 'draft'
+            )
+            """)
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", all_migrations)
+    status = migrations.migrate()
+
+    assert status["applied_now"] == ["0004_optional_cover_branch"]
+    with duckdb.connect(str(database_path)) as con:
+        state = con.execute("""
+            SELECT workflow_status, workflow_current_node, workflow_action,
+                   workflow_needs_review, pipeline_stage, cover_status
+            FROM book_items
+            WHERE id = '01A0001'
+            """).fetchone()
+    assert state == ("done", "workflow_done", None, False, "done", None)
 
 
 def test_read_only_inspection_does_not_create_a_missing_database(tmp_path, monkeypatch):
@@ -68,6 +105,7 @@ def test_read_only_inspection_does_not_create_a_missing_database(tmp_path, monke
         "0001_baseline",
         "0002_v0_1_1",
         "0003_form_lifecycle",
+        "0004_optional_cover_branch",
     ]
     assert not database_path.exists()
 
@@ -91,6 +129,7 @@ def test_migrations_can_prepare_a_candidate_without_touching_the_active_database
         ("0001_baseline",),
         ("0002_v0_1_1",),
         ("0003_form_lifecycle",),
+        ("0004_optional_cover_branch",),
     ]
 
 
@@ -205,7 +244,11 @@ def test_legacy_baseline_checksum_is_upgraded_safely(tmp_path, monkeypatch):
     status = migrations.migrate()
 
     assert status["upgraded_checksums_now"] == ["0001_baseline"]
-    assert status["applied_now"] == ["0002_v0_1_1", "0003_form_lifecycle"]
+    assert status["applied_now"] == [
+        "0002_v0_1_1",
+        "0003_form_lifecycle",
+        "0004_optional_cover_branch",
+    ]
     assert all(item["checksum_state"] == "current" for item in status["migrations"])
     with duckdb.connect(str(database_path)) as con:
         assert con.execute("""
@@ -283,6 +326,7 @@ def test_migrates_real_v0_1_1_database_without_changing_user_data(
         "0001_baseline",
         "0002_v0_1_1",
         "0003_form_lifecycle",
+        "0004_optional_cover_branch",
     ]
     assert before_book == after_book
     assert before_tables == after_tables
