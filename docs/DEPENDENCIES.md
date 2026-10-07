@@ -2,86 +2,106 @@
 
 ## Contrato
 
-`pyproject.toml` es la declaración mantenida a mano. Define rangos compatibles
-para las dependencias directas, las herramientas de desarrollo y el sistema de
-construcción. `requirements.lock` fija el entorno completo con sumas de
-comprobación y es el archivo que se
-instala tanto en equipos de usuario como en CI.
+`pyproject.toml` es la única declaración de dependencias del proyecto. Sus
+secciones tienen responsabilidades distintas:
 
-El archivo de bloqueo incluye las herramientas de desarrollo porque este
-repositorio se
-distribuye como aplicación autocontenida, no como una biblioteca. También fija
-`colorama` y `tzdata`: son dependencias puras de Python que algunos paquetes
-solicitan solo en Windows y deben estar presentes en un archivo de bloqueo
-creado en Linux.
+- `project.dependencies` contiene las dependencias de ejecución;
+- `project.optional-dependencies.dev` contiene las herramientas de desarrollo,
+  pruebas y construcción;
+- `build-system.requires` contiene lo necesario para construir el paquete.
+
+Las dependencias directas usan intervalos compatibles, por ejemplo
+`openpyxl>=3.1,<4`. `pip` resuelve en cada instalación las versiones concretas y
+sus dependencias indirectas dentro de esos límites. El repositorio no mantiene
+un archivo de bloqueo separado.
+
+`colorama` y `tzdata` figuran de forma explícita porque la aplicación debe
+funcionar tanto en Linux como en Windows.
 
 ## Instalación
 
-`scripts/appctl.py setup` crea `.venv`, instala el archivo de bloqueo
-verificando sus sumas de comprobación, instala el
-proyecto editable sin volver a resolver dependencias y
-ejecuta `pip check`. Guarda junto al entorno las huellas de `pyproject.toml`,
-`requirements.lock` y la versión menor de Python.
+```bash
+python3 scripts/appctl.py setup
+```
+
+`setup` prepara los recursos, crea `.venv` cuando hace falta e instala el
+proyecto editable con sus herramientas de desarrollo mediante el equivalente a:
+
+```bash
+python -m pip install --upgrade --editable ".[dev]"
+python -m pip check
+```
+
+El controlador guarda dentro de `.venv` la versión menor de Python, la huella
+completa de `pyproject.toml` y una huella específica de sus secciones de
+dependencias.
 
 Al arrancar después de una actualización:
 
-- si solo cambia el metadato de proyecto, reinstala el proyecto editable;
-- si cambia el archivo de bloqueo o la versión menor de Python, reconstruye
-  `.venv`;
-- si falta una dependencia o la API `iso639.Language`, repara la instalación.
+- si cambia la versión menor de Python o la declaración de dependencias,
+  reconstruye `.venv` para no conservar paquetes retirados;
+- si solo cambia otro metadato de `pyproject.toml`, actualiza la instalación
+  editable sin volver a resolver las dependencias;
+- si falta un módulo necesario, repara la instalación;
+- si no cambia nada, conserva el entorno existente y arranca directamente.
 
-La reconstrucción completa evita conservar paquetes retirados y elimina
-colisiones entre módulos, como la causada por instalar `iso639` en lugar de la
-distribución correcta, `python-iso639`.
+Una instalación anterior que todavía tenga el antiguo estado basado en
+`requirements.lock` se reconstruye una sola vez al ejecutar `setup`.
+
+### Primera actualización desde el sistema anterior
+
+El `appctl` anterior intentaba usar `requirements.lock` después de actualizar el
+código. Como ese archivo ya no existe, una copia instalada con ese controlador
+necesita una actualización manual única:
+
+```bash
+python3 scripts/appctl.py stop
+git pull --ff-only origin main
+python3 scripts/appctl.py setup
+```
+
+A partir de ahí, el controlador nuevo vuelve a gestionar las actualizaciones
+automáticas con `pyproject.toml`.
 
 ## Mantenimiento
 
-Después de modificar dependencias en `pyproject.toml`:
+Después de añadir, eliminar o cambiar una dependencia en `pyproject.toml`:
 
 ```bash
-make lock
-make check-lock
+make setup
+make lint
 make test
 make build
 ```
 
-Estos objetivos usan el entorno de desarrollo ya creado con `make setup`. No
-ejecutan `ensure-env` porque, durante la edición, `pyproject.toml` puede estar
-deliberadamente adelantado respecto al archivo de bloqueo que se está generando.
-El siguiente
-`make test` o `make build` sí pasa por `appctl` y reconstruye el entorno.
-
-`make lock` conserva las versiones ya fijadas siempre que sigan siendo
-compatibles. Para una actualización deliberada de todas las dependencias:
+`make install` fuerza una reconstrucción completa del entorno y una resolución
+nueva de todas las dependencias compatibles:
 
 ```bash
-make upgrade-lock
-make check-lock
-make test
-make build
+make install
 ```
 
-El archivo de bloqueo se genera con `pip-tools`, sumas de comprobación, finales
-de línea LF y sin rutas ni índices locales. `.gitattributes` conserva LF también
-en las copias de trabajo de Windows. No debe editarse a mano.
+También puede hacerse sin GNU Make:
+
+```bash
+python3 scripts/appctl.py setup --force
+```
+
+La construcción usa el aislamiento estándar de `python -m build`, que instala
+en un entorno temporal los requisitos declarados en `build-system.requires`.
+
+## Reproducibilidad
+
+Dos instalaciones realizadas en fechas distintas pueden resolver versiones
+menores diferentes dentro de los intervalos declarados. A cambio, la instalación
+no depende de un lock generado en otro sistema operativo ni de hashes de ruedas
+específicas de una plataforma.
+
+La integración continua instala directamente el extra `dev` desde
+`pyproject.toml` en Python 3.12 sobre Ubuntu y Windows. Después ejecuta lint,
+pruebas, smoke test y construcción del paquete. Estos controles detectan si una
+versión nueva compatible introduce una incompatibilidad.
 
 La generación y lectura de los libros de revisión `.xlsx` usa `openpyxl`. El
 formato OOXML conserva Unicode y no comparte la codificación `windows-1252` del
 TXT específico para AbeBooks.
-
-## Validación
-
-La integración continua instala exclusivamente `requirements.lock`, comprueba
-que puede regenerarse sin diferencias de contenido, ejecuta el análisis
-estático y las pruebas, y construye la rueda y el paquete fuente. Al comparar,
-normaliza los finales de línea para que la representación CRLF de una copia de
-trabajo de Windows no se confunda con un cambio de dependencias. La matriz usa
-Python 3.12 en Ubuntu y Windows para cubrir los dos sistemas de los lanzadores
-de `tools/`.
-
-La instalación de usuario compatible es una copia de trabajo Git, porque
-`appctl`, los
-lanzadores y los recursos locales forman parte del producto. La rueda y el
-paquete fuente son controles de integridad del espacio de nombres de Python; no
-se publican
-como instalador autónomo de la aplicación.

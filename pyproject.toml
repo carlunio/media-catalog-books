@@ -34,8 +34,7 @@ dev = [
   "ruff>=0.15,<1",
   "black>=26.5,<27",
   "httpx>=0.28,<1",
-  "build>=1.6,<2",
-  "pip-tools>=7.6,<8"
+  "build>=1.6,<2"
 ]
 
 [tool.black]

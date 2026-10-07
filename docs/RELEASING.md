@@ -20,8 +20,8 @@ cambios locales.
 ## Lista de publicación
 
 1. Confirmar que el árbol de `develop` está limpio.
-2. Ejecutar `make check-lock`, `make lint`, `make test`, `make smoke` y
-   `make build`. `make lint` comprueba tanto Ruff como el formato de Black.
+2. Ejecutar `make lint`, `make test`, `make smoke` y `make build`.
+   `make lint` comprueba tanto Ruff como el formato de Black.
 3. Ejecutar `python3 scripts/appctl.py doctor` y revisar todos sus avisos.
 4. Actualizar la versión en `pyproject.toml`.
 5. Mover los cambios de `Unreleased` a la nueva versión en `CHANGELOG.md`.

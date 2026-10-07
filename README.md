@@ -184,7 +184,9 @@ python3 scripts/appctl.py launch
 ```
 
 `setup` crea `.env` desde `.env.example` cuando falta y nunca sobrescribe una
-configuración existente.
+configuración existente. `pyproject.toml` es la única fuente de dependencias; el
+detalle de instalación y actualización está en
+[`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md).
 
 También se puede usar `tools/set-up-app.*` una vez y después
 `tools/launch-app.*`. El diagnóstico de la instalación está disponible con
@@ -228,12 +230,8 @@ python3 scripts/appctl.py stop
 
 - `make prepare-assets`: descarga y valida los recursos locales necesarios.
 - `make setup`: prepara recursos, crea `.venv` e instala dependencias.
-- `make install`: reinstala dependencias del proyecto.
-- `make lock`: sincroniza `requirements.lock` conservando las versiones fijadas.
-- `make upgrade-lock`: actualiza el archivo de bloqueo dentro de los rangos de
-  `pyproject.toml`.
-- `make check-lock`: comprueba que la declaración y el archivo de bloqueo
-  coinciden.
+- `make install`: reconstruye el entorno y resuelve de nuevo las dependencias
+  de `pyproject.toml`.
 - `make build`: genera la rueda y el paquete fuente en `dist/`.
 - `make update`: aplica el actualizador estable de `appctl`.
 - `make start`: actualización automática y arranque estable.

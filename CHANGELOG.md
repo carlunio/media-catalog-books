@@ -25,6 +25,13 @@
 
 ### Cambiado
 
+- `pyproject.toml` pasa a ser la única declaración de dependencias. La
+  instalación y la integración continua resuelven directamente sus intervalos
+  compatibles; se eliminan `requirements.lock`, `pip-tools` y los comandos de
+  mantenimiento del lock. `appctl` reconstruye el entorno cuando cambia la
+  declaración y permite forzarlo mediante `setup --force` o `make install`.
+  Las instalaciones con el controlador anterior requieren una actualización
+  manual única antes de recuperar el flujo automático.
 - La descarga de portadas pasa a ser una rama opcional que depende de las fichas
   de las API. Toda ejecución que incluya metadatos recorre el módulo completo,
   incluso con cero fichas pendientes de esa fase, y reintenta los ID cuyo
@@ -48,9 +55,6 @@
 
 ### Corregido
 
-- La validación de `requirements.lock` en Windows normaliza los finales de línea
-  antes de comparar el archivo regenerado y deja de confundir CRLF con un cambio
-  de dependencias.
 - La prueba del actualizador crea de forma explícita la rama `main` en su remoto
   temporal y ya no depende de la rama inicial configurada en el sistema.
 - Se revisan la ortografía española y la terminología de la documentación, la

@@ -1,4 +1,3 @@
-import re
 import tomllib
 from pathlib import Path
 
@@ -8,38 +7,33 @@ from setuptools import find_namespace_packages
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
-LOCK_PATH = PROJECT_ROOT / "requirements.lock"
-PIN_PATTERN = re.compile(r"^([A-Za-z0-9_.-]+)==")
 
 
-def _declared_names() -> set[str]:
-    document = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
-    requirements = list(document["project"]["dependencies"])
-    requirements.extend(document["project"]["optional-dependencies"]["dev"])
-    requirements.extend(document["build-system"]["requires"])
+def _dependency_names(requirements: list[str]) -> set[str]:
     return {canonicalize_name(Requirement(item).name) for item in requirements}
 
 
-def _locked_names() -> set[str]:
-    names = set()
-    for line in LOCK_PATH.read_text(encoding="utf-8").splitlines():
-        match = PIN_PATTERN.match(line)
-        if match:
-            names.add(canonicalize_name(match.group(1)))
-    return names
+def _pyproject_document() -> dict:
+    return tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
 
 
-def test_lock_contains_all_declared_dependencies_and_hashes():
-    lock_text = LOCK_PATH.read_text(encoding="utf-8")
+def test_pyproject_is_the_only_dependency_manifest():
+    document = _pyproject_document()
+    project = document["project"]
 
-    assert _declared_names() <= _locked_names()
-    assert "--hash=sha256:" in lock_text
-    assert "/home/" not in lock_text
-    assert "file://" not in lock_text
+    runtime_names = _dependency_names(project["dependencies"])
+    dev_names = _dependency_names(project["optional-dependencies"]["dev"])
+    build_names = _dependency_names(document["build-system"]["requires"])
+
+    assert not (PROJECT_ROOT / "requirements.lock").exists()
+    assert "pip-tools" not in dev_names
+    assert {"setuptools", "wheel"} <= build_names
+    assert {"pytest", "ruff", "black", "httpx", "build"} <= dev_names
+    assert {"colorama", "tzdata"} <= runtime_names
 
 
 def test_package_discovery_matches_the_src_namespace_used_by_imports():
-    document = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    document = _pyproject_document()
     setuptools = document["tool"]["setuptools"]
 
     assert "package-dir" not in setuptools
@@ -55,14 +49,8 @@ def test_package_discovery_matches_the_src_namespace_used_by_imports():
 
 
 def test_iso639_distribution_matches_the_api_used_by_the_application():
-    locked_names = _locked_names()
+    runtime_names = _dependency_names(_pyproject_document()["project"]["dependencies"])
 
-    assert "python-iso639" in locked_names
-    assert "iso639" not in locked_names
-    assert "language-data" in locked_names
-
-
-def test_lock_includes_dependencies_needed_only_on_windows():
-    locked_names = _locked_names()
-
-    assert {"colorama", "tzdata"} <= locked_names
+    assert "python-iso639" in runtime_names
+    assert "iso639" not in runtime_names
+    assert "langcodes" in runtime_names

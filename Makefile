@@ -52,7 +52,6 @@ MIGRATIONS_SCRIPT := $(MAKEFILE_DIR)/scripts/migrate_db.py
 SNAPSHOTS_SCRIPT := $(MAKEFILE_DIR)/scripts/snapshots.py
 PREPARE_ASSETS_SCRIPT := $(MAKEFILE_DIR)/scripts/prepare_local_assets.py
 APPCTL_SCRIPT := $(MAKEFILE_DIR)/scripts/appctl.py
-LOCK_SCRIPT := $(MAKEFILE_DIR)/scripts/lock_dependencies.py
 GIT_REMOTE ?= origin
 GIT_BRANCH ?= main
 DB_PATH ?= data/books.duckdb
@@ -66,7 +65,7 @@ FRONT_PORT ?= 8501
 # =========================
 # PHONY
 # =========================
-.PHONY: prepare-assets setup install lock upgrade-lock check-lock build update start ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart doctor smoke clean lint format test
+.PHONY: prepare-assets setup install build update start ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart doctor smoke clean lint format test
 
 prepare-assets:
 	$(PYTHON_BOOTSTRAP) "$(PREPARE_ASSETS_SCRIPT)"
@@ -75,19 +74,10 @@ setup:
 	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup
 
 install:
-	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup
-
-lock:
-	"$(PYTHON)" "$(LOCK_SCRIPT)"
-
-upgrade-lock:
-	"$(PYTHON)" "$(LOCK_SCRIPT)" --upgrade
-
-check-lock:
-	"$(PYTHON)" "$(LOCK_SCRIPT)" --check
+	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" setup --force
 
 build: ensure-env
-	"$(PYTHON)" -m build --no-isolation
+	"$(PYTHON)" -m build
 
 update:
 	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" update

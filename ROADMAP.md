@@ -58,6 +58,8 @@ herramientas de
 - [x] `P0` Añadir la revisión externa de fichas mediante Excel Unicode, con
   listas cerradas y ampliables, validación previa, confirmación, control de
   conflictos e importación atómica.
+- [x] `P1` Simplificar las instalaciones para usar `pyproject.toml` como única
+  fuente de dependencias en Linux, Windows y CI.
 
 ## Contratos preservados
 

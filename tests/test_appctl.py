@@ -166,6 +166,10 @@ def test_appctl_exposes_all_user_commands():
     for command in commands:
         assert parser.parse_args([command]).command == command
 
+    forced_setup = parser.parse_args(["setup", "--force"])
+    assert forced_setup.command == "setup"
+    assert forced_setup.force is True
+
 
 def test_user_launchers_delegate_to_appctl_without_make():
     tools_dir = appctl.PROJECT_ROOT / "tools"
@@ -188,40 +192,51 @@ def test_user_launchers_delegate_to_appctl_without_make():
         assert "make" not in content
 
 
-def test_release_fingerprint_includes_requirements_lock(tmp_path):
+def test_release_fingerprint_uses_only_pyproject_dependency_sections(tmp_path):
     pyproject_path = tmp_path / "pyproject.toml"
-    lock_path = tmp_path / "requirements.lock"
     pyproject_path.write_text(
-        '[project]\nname = "fixture"\nversion = "1.0.0"\ndependencies = []\n',
+        '[project]\nname = "fixture"\nversion = "1.0.0"\n'
+        'dependencies = ["example>=1,<2"]\n',
         encoding="utf-8",
     )
-    lock_path.write_text("example==1.0\n", encoding="utf-8")
 
     version_before, fingerprint_before = appctl._project_release_data(pyproject_path)
-    lock_path.write_text("example==1.1\n", encoding="utf-8")
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.1.0"\n'
+        'dependencies = ["example>=1,<2"]\n',
+        encoding="utf-8",
+    )
     version_after, fingerprint_after = appctl._project_release_data(pyproject_path)
 
-    assert version_before == version_after == "1.0.0"
-    assert fingerprint_before != fingerprint_after
+    assert version_before == "1.0.0"
+    assert version_after == "1.1.0"
+    assert fingerprint_before == fingerprint_after
+
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.1.0"\n'
+        'dependencies = ["example>=2,<3"]\n',
+        encoding="utf-8",
+    )
+    _, changed_fingerprint = appctl._project_release_data(pyproject_path)
+
+    assert changed_fingerprint != fingerprint_after
 
 
-def test_locked_install_uses_hashes_and_installs_project_without_dependencies(
-    tmp_path, monkeypatch
-):
+def test_install_uses_pyproject_with_development_dependencies(tmp_path, monkeypatch):
     project_root = tmp_path / "project"
     venv_dir = project_root / ".venv"
     project_root.mkdir()
     venv_dir.mkdir()
     pyproject_path = project_root / "pyproject.toml"
-    lock_path = project_root / "requirements.lock"
-    pyproject_path.write_text('[project]\nname = "fixture"\n', encoding="utf-8")
-    lock_path.write_text("example==1.0\n", encoding="utf-8")
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.0.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
     calls: list[list[str]] = []
 
     monkeypatch.setattr(appctl, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(appctl, "VENV_DIR", venv_dir)
     monkeypatch.setattr(appctl, "PYPROJECT_PATH", pyproject_path)
-    monkeypatch.setattr(appctl, "LOCK_PATH", lock_path)
     monkeypatch.setattr(
         appctl,
         "_run",
@@ -240,26 +255,16 @@ def test_locked_install_uses_hashes_and_installs_project_without_dependencies(
             "-m",
             "pip",
             "install",
-            "--require-hashes",
-            "--requirement",
-            str(lock_path),
-        ],
-        [
-            python,
-            "-m",
-            "pip",
-            "install",
-            "--no-deps",
-            "--no-build-isolation",
+            "--upgrade",
             "--editable",
-            str(project_root),
+            f"{project_root}[dev]",
         ],
         [python, "-m", "pip", "check"],
     ]
     assert appctl._read_dependency_state() == appctl._desired_dependency_state()
 
 
-def test_environment_is_rebuilt_when_lock_state_is_missing(tmp_path, monkeypatch):
+def test_environment_is_rebuilt_when_dependency_state_is_missing(tmp_path, monkeypatch):
     project_root = tmp_path / "project"
     venv_dir = project_root / ".venv"
     python_path = venv_dir / (
@@ -270,15 +275,15 @@ def test_environment_is_rebuilt_when_lock_state_is_missing(tmp_path, monkeypatch
     sentinel = venv_dir / "obsolete-package.txt"
     sentinel.write_text("obsolete", encoding="utf-8")
     pyproject_path = project_root / "pyproject.toml"
-    lock_path = project_root / "requirements.lock"
-    pyproject_path.write_text('[project]\nname = "fixture"\n', encoding="utf-8")
-    lock_path.write_text("example==1.0\n", encoding="utf-8")
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.0.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
     installs: list[bool] = []
 
     monkeypatch.setattr(appctl, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(appctl, "VENV_DIR", venv_dir)
     monkeypatch.setattr(appctl, "PYPROJECT_PATH", pyproject_path)
-    monkeypatch.setattr(appctl, "LOCK_PATH", lock_path)
     monkeypatch.setattr(appctl, "_prepare_assets", lambda _env: None)
     monkeypatch.setattr(
         appctl,
@@ -294,6 +299,61 @@ def test_environment_is_rebuilt_when_lock_state_is_missing(tmp_path, monkeypatch
 
     assert installs == [True]
     assert not sentinel.exists()
+
+
+def test_environment_keeps_venv_when_only_project_metadata_changes(
+    tmp_path, monkeypatch
+):
+    project_root = tmp_path / "project"
+    venv_dir = project_root / ".venv"
+    python_path = venv_dir / (
+        "Scripts/python.exe" if appctl.os.name == "nt" else "bin/python"
+    )
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("active environment", encoding="utf-8")
+    pyproject_path = project_root / "pyproject.toml"
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.0.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(appctl, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(appctl, "VENV_DIR", venv_dir)
+    monkeypatch.setattr(appctl, "PYPROJECT_PATH", pyproject_path)
+    installed_state = appctl._desired_dependency_state()
+    pyproject_path.write_text(
+        '[project]\nname = "fixture"\nversion = "1.1.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
+    project_installs: list[bool] = []
+    written_states: list[dict[str, str]] = []
+
+    monkeypatch.setattr(appctl, "_prepare_assets", lambda _env: None)
+    monkeypatch.setattr(appctl, "_read_dependency_state", lambda: installed_state)
+    monkeypatch.setattr(appctl, "_missing_modules", lambda _env: [])
+    monkeypatch.setattr(
+        appctl, "_install_project", lambda _env: project_installs.append(True)
+    )
+    monkeypatch.setattr(
+        appctl, "_write_dependency_state", lambda state: written_states.append(state)
+    )
+    monkeypatch.setattr(
+        appctl,
+        "_remove_managed_venv",
+        lambda: (_ for _ in ()).throw(AssertionError("No debe borrar .venv")),
+    )
+    monkeypatch.setattr(
+        appctl,
+        "_install_dependencies",
+        lambda _env: (_ for _ in ()).throw(
+            AssertionError("No debe resolver las dependencias")
+        ),
+    )
+
+    appctl._ensure_environment({})
+
+    assert project_installs == [True]
+    assert written_states == [appctl._desired_dependency_state()]
 
 
 def test_stop_requests_a_coordinated_controller_shutdown_first(monkeypatch):

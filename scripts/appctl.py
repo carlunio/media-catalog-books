@@ -32,7 +32,6 @@ UPDATE_STATUS_PATH = RUNTIME_DIR / "last-update.json"
 ENV_PATH = PROJECT_ROOT / ".env"
 ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
-LOCK_PATH = PROJECT_ROOT / "requirements.lock"
 PREPARE_ASSETS_SCRIPT = PROJECT_ROOT / "scripts" / "prepare_local_assets.py"
 INIT_DB_SCRIPT = PROJECT_ROOT / "scripts" / "init_db.py"
 FRONTEND_APP = PROJECT_ROOT / "src" / "frontend" / "app.py"
@@ -51,7 +50,6 @@ REQUIRED_MODULES = (
     "ruff",
     "black",
     "build",
-    "piptools",
 )
 DOTENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
@@ -458,17 +456,29 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _dependency_fingerprint(document: dict[str, Any]) -> str:
+    project = document.get("project", {})
+    dependency_data = {
+        "build-system": document.get("build-system", {}),
+        "requires-python": project.get("requires-python"),
+        "dependencies": project.get("dependencies", []),
+        "optional-dependencies": project.get("optional-dependencies", {}),
+    }
+    serialized = json.dumps(dependency_data, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(serialized.encode()).hexdigest()
+
+
 def _desired_dependency_state() -> dict[str, str]:
-    missing = [path for path in (PYPROJECT_PATH, LOCK_PATH) if not path.exists()]
-    if missing:
-        raise AppCtlError(
-            "Faltan ficheros de instalacion: "
-            + ", ".join(str(path) for path in missing)
-        )
+    if not PYPROJECT_PATH.exists():
+        raise AppCtlError(f"Falta el fichero de instalación: {PYPROJECT_PATH}")
+    try:
+        document = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise AppCtlError(f"No se pudo leer {PYPROJECT_PATH}: {exc}") from exc
     return {
         "python": f"{sys.version_info.major}.{sys.version_info.minor}",
         "pyproject_sha256": _file_sha256(PYPROJECT_PATH),
-        "lock_sha256": _file_sha256(LOCK_PATH),
+        "dependencies_sha256": _dependency_fingerprint(document),
     }
 
 
@@ -498,7 +508,6 @@ def _install_project(env: dict[str, str]) -> None:
             "pip",
             "install",
             "--no-deps",
-            "--no-build-isolation",
             "--editable",
             PROJECT_ROOT,
         ],
@@ -515,13 +524,13 @@ def _install_dependencies(env: dict[str, str]) -> None:
             "-m",
             "pip",
             "install",
-            "--require-hashes",
-            "--requirement",
-            LOCK_PATH,
+            "--upgrade",
+            "--editable",
+            f"{PROJECT_ROOT}[dev]",
         ],
         env=env,
     )
-    _install_project(env)
+    _run([python, "-m", "pip", "check"], env=env)
     _write_dependency_state(_desired_dependency_state())
 
 
@@ -561,12 +570,12 @@ def _ensure_environment(env: dict[str, str], *, force_install: bool = False) -> 
     desired_state = _desired_dependency_state()
     created = not _venv_python().exists()
     installed_state = _read_dependency_state() if not created else {}
-    lock_changed = any(
+    dependencies_changed = any(
         installed_state.get(key) != desired_state[key]
-        for key in ("python", "lock_sha256")
+        for key in ("python", "dependencies_sha256")
     )
-    if not created and (force_install or lock_changed):
-        print("Reconstruyendo el entorno para aplicar el lock de dependencias...")
+    if not created and (force_install or dependencies_changed):
+        print("Reconstruyendo el entorno para aplicar las dependencias...")
         _remove_managed_venv()
         created = True
     _create_venv(env)
@@ -677,17 +686,7 @@ def _project_release_data(path: Path = PYPROJECT_PATH) -> tuple[str, str]:
         return "0.0.0", ""
 
     project = document.get("project", {})
-    lock_path = path.with_name(LOCK_PATH.name)
-    dependency_data = {
-        "build-system": document.get("build-system", {}),
-        "requires-python": project.get("requires-python"),
-        "dependencies": project.get("dependencies", []),
-        "optional-dependencies": project.get("optional-dependencies", {}),
-        "lock-sha256": _file_sha256(lock_path) if lock_path.exists() else None,
-    }
-    serialized = json.dumps(dependency_data, sort_keys=True, ensure_ascii=True)
-    fingerprint = hashlib.sha256(serialized.encode()).hexdigest()
-    return str(project.get("version") or "0.0.0"), fingerprint
+    return str(project.get("version") or "0.0.0"), _dependency_fingerprint(document)
 
 
 def _git_output(
@@ -1410,10 +1409,10 @@ def _stop_child(process: subprocess.Popen[Any] | None) -> None:
         pass
 
 
-def command_setup(_: argparse.Namespace) -> int:
+def command_setup(args: argparse.Namespace) -> int:
     with _operation_lock():
         env = _validated_environment(create_env=True)
-        _ensure_environment(env)
+        _ensure_environment(env, force_install=bool(args.force))
     print("Preparación completada.")
     return 0
 
@@ -1775,10 +1774,10 @@ def command_doctor(_: argparse.Namespace) -> int:
                     errors += 1
                     _doctor_line(
                         "ERROR",
-                        "El entorno no coincide con pyproject.toml y requirements.lock; ejecuta setup.",
+                        "El entorno no coincide con pyproject.toml; ejecuta setup.",
                     )
                 else:
-                    _doctor_line("OK", "Dependencias sincronizadas con el lock.")
+                    _doctor_line("OK", "Dependencias sincronizadas con pyproject.toml.")
     else:
         errors += 1
         _doctor_line("ERROR", "No existe el entorno virtual; ejecuta setup.")
@@ -1976,6 +1975,12 @@ def _build_parser() -> argparse.ArgumentParser:
     }
     for name, (handler, help_text) in commands.items():
         command_parser = subparsers.add_parser(name, help=help_text)
+        if name == "setup":
+            command_parser.add_argument(
+                "--force",
+                action="store_true",
+                help="Reconstruye el entorno aunque no haya cambiado pyproject.toml.",
+            )
         command_parser.set_defaults(handler=handler)
     return parser
 
