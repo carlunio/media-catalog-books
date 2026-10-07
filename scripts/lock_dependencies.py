@@ -55,7 +55,13 @@ def _check_lock() -> int:
         candidate_path = Path(tmp_dir) / LOCK_PATH.name
         shutil.copy2(LOCK_PATH, candidate_path)
         _compile(candidate_path, upgrade=False)
-        if candidate_path.read_bytes() != LOCK_PATH.read_bytes():
+        # Git puede materializar los archivos de texto con CRLF en Windows.
+        # La lectura en modo texto normaliza esos saltos a "\n" y permite
+        # comparar el contenido resuelto sin confundirlo con esa diferencia
+        # de la copia de trabajo.
+        candidate = candidate_path.read_text(encoding="utf-8")
+        current = LOCK_PATH.read_text(encoding="utf-8")
+        if candidate != current:
             print(
                 "requirements.lock no coincide con pyproject.toml; "
                 "ejecuta `make lock`.",

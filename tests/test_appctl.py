@@ -586,7 +586,7 @@ def test_stable_update_fast_forwards_from_a_local_remote(tmp_path, monkeypatch):
     git(source, "add", ".")
     git(source, "commit", "-m", "initial")
 
-    git(tmp_path, "init", "--bare", str(remote))
+    git(tmp_path, "init", "--bare", "--initial-branch=main", str(remote))
     git(source, "remote", "add", "origin", str(remote))
     git(source, "push", "-u", "origin", "main")
     git(tmp_path, "clone", str(remote), str(install))

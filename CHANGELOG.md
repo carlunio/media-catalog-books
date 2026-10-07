@@ -41,6 +41,11 @@
 
 ### Corregido
 
+- La validación de `requirements.lock` en Windows normaliza los finales de línea
+  antes de comparar el archivo regenerado y deja de confundir CRLF con un cambio
+  de dependencias.
+- La prueba del actualizador crea de forma explícita la rama `main` en su remoto
+  temporal y ya no depende de la rama inicial configurada en el sistema.
 - Se revisan la ortografía española y la terminología de la documentación, la
   interfaz y los mensajes operativos.
 - La sobrescritura del flujo de trabajo solo repite la etapa elegida y las

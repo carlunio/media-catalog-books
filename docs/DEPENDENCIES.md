@@ -62,16 +62,18 @@ make build
 ```
 
 El archivo de bloqueo se genera con `pip-tools`, sumas de comprobación, finales
-de línea LF y sin rutas ni
-índices locales. No debe editarse a mano.
+de línea LF y sin rutas ni índices locales. `.gitattributes` conserva LF también
+en las copias de trabajo de Windows. No debe editarse a mano.
 
 ## Validación
 
 La integración continua instala exclusivamente `requirements.lock`, comprueba
-que puede regenerarse sin diferencias, ejecuta el análisis estático y las
-pruebas, y construye la rueda y el paquete fuente. La
-matriz usa Python 3.12 en Ubuntu y Windows para cubrir los dos sistemas de los
-lanzadores de `tools/`.
+que puede regenerarse sin diferencias de contenido, ejecuta el análisis
+estático y las pruebas, y construye la rueda y el paquete fuente. Al comparar,
+normaliza los finales de línea para que la representación CRLF de una copia de
+trabajo de Windows no se confunda con un cambio de dependencias. La matriz usa
+Python 3.12 en Ubuntu y Windows para cubrir los dos sistemas de los lanzadores
+de `tools/`.
 
 La instalación de usuario compatible es una copia de trabajo Git, porque
 `appctl`, los
