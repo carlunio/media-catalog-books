@@ -1,21 +1,22 @@
-# Snapshots de DuckDB
+# Instantáneas de DuckDB
 
-Los snapshots permiten trasladar el estado completo de Media Catalog Books
+Las instantáneas permiten trasladar el estado completo de Media Catalog Books
 entre instalaciones. Cada publicación contiene un fichero DuckDB y un
 manifiesto JSON con origen, versión de la aplicación, versión de esquema,
-tamaño y hash SHA-256.
+tamaño y suma SHA-256.
 
 ## Compatibilidad
 
 El listado separa tres conceptos:
 
-- `valid`: existen el manifiesto y la base, y el hash coincide.
+- `valid`: existen el manifiesto y la base, y la suma SHA-256 coincide.
 - `compatible`: esta versión de la aplicación conoce el esquema declarado.
-- `importable`: el snapshot es válido y compatible.
+- `importable`: la instantánea es válida y compatible.
 
-Un snapshot puede estar en estado `current`, `upgrade_required` o
+Una instantánea puede estar en estado `current`, `upgrade_required` o
 `incompatible`. El valor histórico `schema_version: "1"` se admite como legado
-y se prepara con las migraciones incrementales actuales. Una versión futura o
+y se actualiza mediante las migraciones incrementales actuales. Una versión
+futura o
 desconocida se muestra en el listado, pero no se puede seleccionar para
 importarla.
 
@@ -26,16 +27,16 @@ una base de otra aplicación o con migraciones desconocidas.
 ## Secuencia de importación
 
 1. Exige confirmación explícita y vuelve a comprobar el SHA-256 del original.
-2. Copia el snapshot a un fichero temporal junto a la base local.
+2. Copia la instantánea a un archivo temporal junto a la base local.
 3. Comprueba que es una base DuckDB legible y contiene las relaciones propias
    de Media Catalog Books.
 4. Aplica a la copia todas las migraciones pendientes y valida otra vez el
    esquema.
-5. Crea un backup de la base local en `data/backups/local`.
+5. Crea una copia de seguridad de la base local en `data/backups/local`.
 6. Sustituye la base mediante un renombrado atómico y registra la importación.
 7. Si falla el registro final, restaura automáticamente la base anterior.
 
-El snapshot publicado nunca se modifica: las migraciones se aplican únicamente
+La instantánea publicada nunca se modifica: las migraciones se aplican únicamente
 a la copia temporal. La respuesta API y el estado local registran la versión de
 origen, la versión final y las migraciones ejecutadas.
 

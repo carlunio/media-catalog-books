@@ -26,7 +26,7 @@ orden.
 ## Ubuntu / Linux
 
 Usa los ficheros `.desktop` equivalentes. Abren una terminal y ejecutan el
-script `.sh` correspondiente. El primer uso puede requerir marcar el fichero
+script `.sh` correspondiente. El primer uso puede requerir marcar el archivo
 `.desktop` como ejecutable y elegir `Permitir ejecución`.
 
 ## Controlador
@@ -39,7 +39,8 @@ script `.sh` correspondiente. El primer uso puede requerir marcar el fichero
 - `dev`: arranca con recarga y no consulta ni modifica Git.
 - `update`: fuerza la comprobación estable sin arrancar la aplicación.
 - `stop`: detiene únicamente los procesos registrados por `appctl`.
-- `doctor`: comprueba configuración, Python, Git, lock, recursos, rutas, DuckDB,
+- `doctor`: comprueba la configuración, Python, Git, el archivo de bloqueo, los
+  recursos, las rutas, DuckDB,
   puertos, proveedores y procesos.
 - `update-and-launch`: alias compatible del nuevo `launch` automático.
 
@@ -49,11 +50,12 @@ Puede ejecutarse directamente:
 python3 scripts/appctl.py doctor
 ```
 
-Los procesos activos se identifican mediante `.runtime/appctl.json`, que no
-se versiona. Los targets Make siguen disponibles como accesos para desarrollo.
+Los procesos activos se identifican mediante `.runtime/appctl.json`, que no se
+versiona. Los objetivos de Make siguen disponibles como accesos para desarrollo.
 
 Si no hay conexión, `launch` usa la versión instalada. Si la rama no es
-`main`, hay cambios locales o el historial no permite fast-forward, omite la
-actualización sin sobrescribir nada. Antes de aplicar una versión nueva crea un
-backup de DuckDB y revierte código y datos si la preparación o el arranque
+`main`, hay cambios locales o el historial no permite un avance directo
+(`fast-forward`), omite la actualización sin sobrescribir nada. Antes de
+aplicar una versión nueva crea una copia de seguridad de DuckDB y revierte el
+código y los datos si la preparación o el arranque
 fallan.
