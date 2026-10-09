@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=Media Catalog Books - Actualizar y arrancar
-Comment=Actualiza la aplicación y después arranca backend y frontend
+Comment=Alias compatible del lanzador principal
 Terminal=true
 Icon=utilities-terminal
 Categories=Development;

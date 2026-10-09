@@ -236,6 +236,8 @@ python3 scripts/appctl.py stop
 - `make update`: aplica el actualizador estable de `appctl`.
 - `make start`: actualización automática y arranque estable.
 - `make dev`: arranque de desarrollo sin actualización y con recarga.
+- `make restart`: detiene y vuelve a arrancar el modo estable.
+- `make restart-dev`: detiene y vuelve a arrancar el modo de desarrollo.
 - `make dev-back`: solo backend.
 - `make dev-front`: solo la interfaz.
 - `make init-db`: crea/ajusta esquema de DuckDB mediante migraciones.

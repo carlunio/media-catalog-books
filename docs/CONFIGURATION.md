@@ -245,8 +245,8 @@ python3 scripts/appctl.py doctor
 ```
 
 El diagnóstico no modifica la base ni aplica migraciones. Comprueba el remoto y
-la rama Git, sincronización del entorno con el archivo de bloqueo, integridad
-de los recursos,
+la rama Git, sincronización del entorno con `pyproject.toml`, integridad de
+los recursos,
 permisos de las rutas, esquema de DuckDB, disponibilidad de puertos, procesos y
 conectividad con Ollama. Los errores incluyen la acción de recuperación.
 

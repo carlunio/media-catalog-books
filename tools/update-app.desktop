@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=Media Catalog Books - Actualizar
-Comment=Descarga los últimos cambios y reinstala dependencias
+Comment=Descarga los últimos cambios y prepara la instalación
 Terminal=true
 Icon=utilities-terminal
 Categories=Development;

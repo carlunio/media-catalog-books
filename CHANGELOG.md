@@ -32,6 +32,9 @@
   declaración y permite forzarlo mediante `setup --force` o `make install`.
   Las instalaciones con el controlador anterior requieren una actualización
   manual única antes de recuperar el flujo automático.
+- Los lanzadores de `tools/` se documentan como accesos equivalentes a `appctl`
+  y Make. `make restart` reinicia ahora el modo estable y `make restart-dev`
+  conserva el reinicio con recarga para desarrollo.
 - La descarga de portadas pasa a ser una rama opcional que depende de las fichas
   de las API. Toda ejecución que incluya metadatos recorre el módulo completo,
   incluso con cero fichas pendientes de esa fase, y reintenta los ID cuyo
@@ -55,6 +58,9 @@
 
 ### Corregido
 
+- La prueba de empaquetado deja de importar `setuptools` desde el entorno de
+  ejecución; el backend de construcción permanece aislado como declara
+  `pyproject.toml`, por lo que CI funciona igual en Linux y Windows.
 - La prueba del actualizador crea de forma explícita la rama `main` en su remoto
   temporal y ya no depende de la rama inicial configurada en el sistema.
 - Se revisan la ortografía española y la terminología de la documentación, la

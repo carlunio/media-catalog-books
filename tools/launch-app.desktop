@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=Media Catalog Books - Arrancar
-Comment=Arranca el backend y el frontend
+Comment=Comprueba actualizaciones y arranca el backend y el frontend
 Terminal=true
 Icon=utilities-terminal
 Categories=Development;

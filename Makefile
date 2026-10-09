@@ -65,7 +65,7 @@ FRONT_PORT ?= 8501
 # =========================
 # PHONY
 # =========================
-.PHONY: prepare-assets setup install build update start ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart doctor smoke clean lint format test
+.PHONY: prepare-assets setup install build update start ensure-env init-db db-maint db-repack db-repack-replace publish-snapshot list-snapshots import-snapshot cleanup-snapshots migrate-db dev-back dev-front dev stop stop-back stop-front restart restart-dev doctor smoke clean lint format test
 
 prepare-assets:
 	$(PYTHON_BOOTSTRAP) "$(PREPARE_ASSETS_SCRIPT)"
@@ -146,6 +146,10 @@ stop:
 	$(PYTHON_BOOTSTRAP) "$(APPCTL_SCRIPT)" stop
 
 restart:
+	$(MAKE) stop
+	$(MAKE) start
+
+restart-dev:
 	$(MAKE) stop
 	$(MAKE) dev
 

@@ -171,25 +171,25 @@ def test_appctl_exposes_all_user_commands():
     assert forced_setup.force is True
 
 
-def test_user_launchers_delegate_to_appctl_without_make():
+def test_user_launchers_delegate_to_expected_appctl_commands_without_make():
     tools_dir = appctl.PROJECT_ROOT / "tools"
-    launchers = (
-        "launch-app.sh",
-        "set-up-app.sh",
-        "stop-app.sh",
-        "update-app.sh",
-        "update-and-launch-app.sh",
-        "launch-app.bat",
-        "set-up-app.bat",
-        "stop-app.bat",
-        "update-app.bat",
-        "update-and-launch-app.bat",
-    )
+    launchers = {
+        "launch-app": "launch",
+        "set-up-app": "setup",
+        "stop-app": "stop",
+        "update-app": "update",
+        "update-and-launch-app": "update-and-launch",
+        "doctor-app": "doctor",
+    }
 
-    for filename in launchers:
-        content = (tools_dir / filename).read_text(encoding="utf-8").lower()
-        assert "appctl" in content
-        assert "make" not in content
+    for launcher, command in launchers.items():
+        for suffix in (".sh", ".bat"):
+            content = (
+                (tools_dir / f"{launcher}{suffix}").read_text(encoding="utf-8").lower()
+            )
+            assert "run-appctl" in content
+            assert command in content
+            assert "make" not in content
 
 
 def test_release_fingerprint_uses_only_pyproject_dependency_sections(tmp_path):

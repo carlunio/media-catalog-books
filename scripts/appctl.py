@@ -1970,7 +1970,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
         "update-and-launch": (
             command_update_and_launch,
-            "Actualiza la aplicación y después la arranca.",
+            "Alias heredado de launch para accesos directos antiguos.",
         ),
     }
     for name, (handler, help_text) in commands.items():
