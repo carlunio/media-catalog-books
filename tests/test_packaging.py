@@ -3,7 +3,6 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
-from setuptools import find_namespace_packages
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
@@ -15,6 +14,13 @@ def _dependency_names(requirements: list[str]) -> set[str]:
 
 def _pyproject_document() -> dict:
     return tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+
+
+def _source_packages() -> set[str]:
+    return {
+        ".".join(path.parent.relative_to(PROJECT_ROOT).parts)
+        for path in (PROJECT_ROOT / "src").rglob("__init__.py")
+    }
 
 
 def test_pyproject_is_the_only_dependency_manifest():
@@ -43,7 +49,7 @@ def test_package_discovery_matches_the_src_namespace_used_by_imports():
     }
     assert setuptools["package-data"] == {"src.frontend": ["assets/*.css"]}
 
-    discovered = set(find_namespace_packages(where=PROJECT_ROOT, include=["src*"]))
+    discovered = _source_packages()
     assert {"src", "src.backend", "src.frontend"} <= discovered
     assert "backend" not in discovered
 
