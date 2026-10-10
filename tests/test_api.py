@@ -72,7 +72,7 @@ def test_backend_imports_without_external_api_keys(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert app.version == "1.0.0"
+    assert app.version == "1.1.0"
 
 
 def test_schema_is_initialized_with_incremental_migrations(tmp_path, monkeypatch):

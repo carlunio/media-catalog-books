@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-10
+
 ### Añadido
 
 - Preparación de imágenes en dos pasos: análisis sin cambios, listado de
