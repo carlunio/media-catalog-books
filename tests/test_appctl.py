@@ -743,3 +743,91 @@ def test_stable_update_fast_forwards_from_a_local_remote(tmp_path, monkeypatch):
     assert git(install, "rev-parse", "HEAD") == git(source, "rev-parse", "HEAD")
     assert result.database_backup is not None
     assert Path(result.database_backup).read_bytes() == b"database-before-update"
+
+
+def test_update_request_is_consumed_only_by_its_controller(tmp_path, monkeypatch):
+    request_path = tmp_path / "update-request.json"
+    request_path.write_text(
+        '{"controller_pid": 42, "target_version": "1.3.0"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(appctl, "UPDATE_REQUEST_PATH", request_path)
+
+    request = appctl._take_update_request(42)
+
+    assert request == {"controller_pid": 42, "target_version": "1.3.0"}
+    assert not request_path.exists()
+
+
+def test_wait_for_services_returns_update_signal_before_polling_children(monkeypatch):
+    class UnexpectedPoll:
+        def poll(self):
+            raise AssertionError(
+                "No se deben consultar procesos tras pedir actualización"
+            )
+
+    services = appctl.RunningServices(
+        backend=UnexpectedPoll(),
+        frontend=UnexpectedPoll(),
+        controller_pid=42,
+        mode="launch",
+    )
+    monkeypatch.setattr(
+        appctl,
+        "_take_update_request",
+        lambda controller_pid: (
+            {"target_version": "1.3.0"} if controller_pid == 42 else None
+        ),
+    )
+
+    assert appctl._wait_for_services(services) == appctl.UPDATE_REQUESTED_SIGNAL
+
+
+def test_launch_restarts_in_stable_mode_after_an_interface_update(monkeypatch):
+    from contextlib import nullcontext
+
+    first_services = object()
+    second_services = object()
+    pending_services = [first_services, second_services]
+    starts = []
+    stops = []
+    update_attempts = []
+
+    monkeypatch.setattr(appctl, "_validated_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(appctl, "_discard_update_request", lambda: None)
+    monkeypatch.setattr(appctl.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(appctl, "_operation_lock", nullcontext)
+    monkeypatch.setattr(appctl, "_stop_recorded_application", lambda: False)
+    monkeypatch.setattr(appctl, "_prepare_application", lambda *_args, **_kwargs: None)
+
+    def start_services(env, *, reload_backend, mode):
+        starts.append((dict(env), reload_backend, mode))
+        return pending_services.pop(0)
+
+    monkeypatch.setattr(appctl, "_start_services", start_services)
+    waits = iter((appctl.UPDATE_REQUESTED_SIGNAL, 0))
+    monkeypatch.setattr(appctl, "_wait_for_services", lambda _services: next(waits))
+    monkeypatch.setattr(
+        appctl, "_stop_services", lambda services: stops.append(services)
+    )
+
+    def attempt_update(_env, *, automatic):
+        update_attempts.append(automatic)
+        return appctl.UpdateResult(status="up_to_date", message="actualizada")
+
+    monkeypatch.setattr(appctl, "_attempt_stable_update", attempt_update)
+    monkeypatch.setattr(appctl, "_mark_update_success", lambda result, _env: result)
+
+    result = appctl._launch_with_mode(
+        automatic_update=False,
+        reload_backend=True,
+        mode="dev",
+    )
+
+    assert result == 0
+    assert starts == [
+        ({"APP_CHANNEL": "develop"}, True, "dev"),
+        ({}, False, "launch"),
+    ]
+    assert update_attempts == [True]
+    assert stops == [first_services, second_services]

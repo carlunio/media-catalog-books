@@ -35,6 +35,8 @@ cambios locales.
 El protocolo de `appctl` debe seguir siendo compatible con la versión
 inmediatamente anterior. Una actualización:
 
+- puede iniciarse desde el botón del menú lateral cuando GitHub publica una
+  release estable posterior;
 - detiene primero la instancia gestionada;
 - comprueba rama y árbol de trabajo;
 - descarga únicamente `origin/main`;

@@ -199,7 +199,10 @@ También se puede usar `tools/set-up-app.*` una vez y después
 `tools/doctor-app.*`. El lanzador normal comprueba `origin/main` en cada
 apertura, aplica
 automáticamente una actualización estable y continúa con la versión instalada
-cuando no hay conexión.
+cuando no hay conexión. El menú lateral consulta la última release pública de
+GitHub cada 15 minutos. Si detecta una versión posterior, el botón de
+actualización detiene limpiamente los servicios, actualiza la instalación y
+vuelve a abrir MC Books en la misma dirección.
 
 Flujo equivalente para desarrollo:
 

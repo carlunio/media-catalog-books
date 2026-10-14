@@ -1,8 +1,8 @@
+import html
 import json
 import os
 import re
 import time
-import html
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,11 @@ try:
     from src.project_meta import get_app_meta
 except ModuleNotFoundError:  # pragma: no cover
     from project_meta import get_app_meta
+
+try:
+    from src.release_updates import get_latest_release, request_managed_update
+except ModuleNotFoundError:  # pragma: no cover
+    from release_updates import get_latest_release, request_managed_update
 
 try:
     from src.llm_models import (
@@ -49,6 +54,7 @@ APP_ICON_PATH = Path(__file__).resolve().parents[2] / "assets" / "dani.png"
 UPDATE_STATUS_PATH = (
     Path(__file__).resolve().parents[2] / ".runtime" / "last-update.json"
 )
+RELEASE_CHECK_TTL = "15m"
 
 
 def _normalize_provider(value: str | None, *, fallback: str) -> str:
@@ -188,6 +194,61 @@ def _apply_theme() -> None:
         st.session_state[THEME_APPLIED_KEY] = True
 
 
+@st.cache_data(ttl=RELEASE_CHECK_TTL, max_entries=4, show_spinner=False)
+def _cached_latest_release(current_version: str):
+    return get_latest_release(current_version)
+
+
+@st.fragment(run_every=RELEASE_CHECK_TTL, key="release_update_control")
+def _render_release_update_control() -> None:
+    release = _cached_latest_release(APP_META.version)
+    if release.error:
+        st.sidebar.button(
+            "Actualización no comprobada",
+            key="release_update_unavailable",
+            icon=":material/cloud_off:",
+            disabled=True,
+            width="stretch",
+            help=release.error,
+        )
+        return
+
+    if not release.available:
+        st.sidebar.button(
+            "Versión actualizada",
+            key="release_update_current",
+            icon=":material/check_circle:",
+            disabled=True,
+            width="stretch",
+        )
+        return
+
+    target_version = release.latest_version or release.tag_name or "nueva versión"
+    if st.sidebar.button(
+        f"Actualizar a {target_version}",
+        key="release_update_start",
+        icon=":material/system_update_alt:",
+        type="primary",
+        width="stretch",
+        help=(
+            "Cierra MC Books, instala la release publicada y vuelve a abrir "
+            "la aplicación."
+        ),
+    ):
+        try:
+            request_managed_update(
+                current_version=APP_META.version,
+                target_version=target_version,
+            )
+        except (OSError, RuntimeError) as exc:
+            st.sidebar.error(str(exc))
+        else:
+            st.sidebar.success(
+                "Actualización solicitada. MC Books se cerrará y volverá a abrirse."
+            )
+            st.stop()
+
+
 def configure_page(title: str = "MC Books") -> None:
     page_icon = str(APP_ICON_PATH) if APP_ICON_PATH.exists() else None
     try:
@@ -199,6 +260,7 @@ def configure_page(title: str = "MC Books") -> None:
         pass
     _apply_theme()
     st.sidebar.caption(f"Versión: {APP_META.display_version}")
+    _render_release_update_control()
     if APP_META.changelog_path.exists():
         st.sidebar.caption(f"Cambios: {APP_META.changelog_path.name}")
     try:

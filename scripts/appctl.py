@@ -29,6 +29,7 @@ RUNTIME_DIR = PROJECT_ROOT / ".runtime"
 RUNTIME_STATE_PATH = RUNTIME_DIR / "appctl.json"
 OPERATION_LOCK_PATH = RUNTIME_DIR / "operation.lock"
 UPDATE_STATUS_PATH = RUNTIME_DIR / "last-update.json"
+UPDATE_REQUEST_PATH = RUNTIME_DIR / "update-request.json"
 ENV_PATH = PROJECT_ROOT / ".env"
 ENV_EXAMPLE_PATH = PROJECT_ROOT / ".env.example"
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
@@ -55,6 +56,7 @@ DOTENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
 FALSE_VALUES = frozenset({"0", "false", "f", "no", "n", "off"})
 LEGACY_ENV_KEYS = frozenset({"OCR_VISION_MODEL"})
+UPDATE_REQUESTED_SIGNAL = object()
 
 
 class AppCtlError(RuntimeError):
@@ -1235,8 +1237,15 @@ def _start_services(
     )
 
 
-def _wait_for_services(services: RunningServices) -> int:
+def _wait_for_services(services: RunningServices) -> int | object:
     while True:
+        update_request = _take_update_request(services.controller_pid)
+        if update_request is not None:
+            target = str(update_request.get("target_version") or "").strip()
+            suffix = f" a la versión {target}" if target else ""
+            print(f"Actualización solicitada desde la interfaz{suffix}.")
+            return UPDATE_REQUESTED_SIGNAL
+
         backend_exit = services.backend.poll()
         frontend_exit = services.frontend.poll()
         if backend_exit is not None:
@@ -1269,6 +1278,37 @@ def _read_runtime_state() -> dict[str, Any] | None:
     except (OSError, ValueError, TypeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _discard_update_request() -> None:
+    try:
+        UPDATE_REQUEST_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _take_update_request(controller_pid: int) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(UPDATE_REQUEST_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError):
+        _discard_update_request()
+        return None
+
+    if not isinstance(payload, dict):
+        _discard_update_request()
+        return None
+    try:
+        requested_controller = int(payload.get("controller_pid") or 0)
+    except (TypeError, ValueError):
+        requested_controller = 0
+    if requested_controller != controller_pid:
+        _discard_update_request()
+        return None
+
+    _discard_update_request()
+    return payload
 
 
 def _remove_runtime_state(*, controller_pid: int | None = None) -> None:
@@ -1507,10 +1547,13 @@ def _launch_with_mode(
     mode: str,
 ) -> int:
     env = _validated_environment(create_env=True)
+    channel_was_injected = False
     if mode == "dev" and not str(env.get("APP_CHANNEL") or "").strip():
         env["APP_CHANNEL"] = "develop"
+        channel_was_injected = True
 
     services: RunningServices | None = None
+    _discard_update_request()
 
     def handle_termination(_signum: int, _frame: Any) -> None:
         raise KeyboardInterrupt
@@ -1518,70 +1561,82 @@ def _launch_with_mode(
     signal.signal(signal.SIGTERM, handle_termination)
 
     try:
-        with _operation_lock():
-            if _stop_recorded_application():
-                print("Se ha detenido una instancia anterior de la aplicación.")
+        while True:
+            with _operation_lock():
+                if _stop_recorded_application():
+                    print("Se ha detenido una instancia anterior de la aplicación.")
 
-            update_result: UpdateResult | None = None
-            if automatic_update:
-                print("Comprobando la versión estable publicada...")
+                update_result: UpdateResult | None = None
+                if automatic_update:
+                    print("Comprobando la versión estable publicada...")
+                    try:
+                        update_result = _attempt_stable_update(env, automatic=True)
+                    except Exception as exc:
+                        update_result = UpdateResult(
+                            status="failed",
+                            message=(
+                                "No se pudo completar la comprobación automática; "
+                                f"se mantiene la versión local: {exc}"
+                            ),
+                        )
+                    print(update_result.message)
+
                 try:
-                    update_result = _attempt_stable_update(env, automatic=True)
-                except Exception as exc:
-                    update_result = UpdateResult(
-                        status="failed",
-                        message=(
-                            "No se pudo completar la comprobación automática; "
-                            f"se mantiene la versión local: {exc}"
+                    _prepare_application(
+                        env,
+                        force_install=bool(
+                            update_result and update_result.dependencies_changed
                         ),
                     )
-                print(update_result.message)
-
-            try:
-                _prepare_application(
-                    env,
-                    force_install=bool(
-                        update_result and update_result.dependencies_changed
-                    ),
-                )
-                services = _start_services(
-                    env,
-                    reload_backend=reload_backend,
-                    mode=mode,
-                )
-            except Exception as exc:
-                if not update_result or not update_result.updated:
-                    if update_result:
-                        _write_update_status(update_result)
-                    raise
-
-                reason = (
-                    "La versión nueva no pudo arrancar y se ha restaurado la "
-                    f"instalación anterior: {exc}"
-                )
-                print(reason, file=sys.stderr)
-                _rollback_update(update_result, env, reason=reason)
-                try:
-                    _prepare_application(env, force_install=False)
                     services = _start_services(
                         env,
                         reload_backend=reload_backend,
                         mode=mode,
                     )
-                except Exception as fallback_exc:
-                    raise AppCtlError(
-                        "También ha fallado el arranque de la versión restaurada: "
-                        f"{fallback_exc}"
-                    ) from fallback_exc
-            else:
-                if update_result:
-                    completed = _mark_update_success(update_result, env)
-                    if completed.status == "updated":
-                        print(completed.message)
+                except Exception as exc:
+                    if not update_result or not update_result.updated:
+                        if update_result:
+                            _write_update_status(update_result)
+                        raise
 
-        if services is None:
-            raise AppCtlError("No se pudieron iniciar los servicios.")
-        return _wait_for_services(services)
+                    reason = (
+                        "La versión nueva no pudo arrancar y se ha restaurado la "
+                        f"instalación anterior: {exc}"
+                    )
+                    print(reason, file=sys.stderr)
+                    _rollback_update(update_result, env, reason=reason)
+                    try:
+                        _prepare_application(env, force_install=False)
+                        services = _start_services(
+                            env,
+                            reload_backend=reload_backend,
+                            mode=mode,
+                        )
+                    except Exception as fallback_exc:
+                        raise AppCtlError(
+                            "También ha fallado el arranque de la versión restaurada: "
+                            f"{fallback_exc}"
+                        ) from fallback_exc
+                else:
+                    if update_result:
+                        completed = _mark_update_success(update_result, env)
+                        if completed.status == "updated":
+                            print(completed.message)
+
+            if services is None:
+                raise AppCtlError("No se pudieron iniciar los servicios.")
+            wait_result = _wait_for_services(services)
+            if wait_result is not UPDATE_REQUESTED_SIGNAL:
+                return int(wait_result)
+
+            _stop_services(services)
+            services = None
+            automatic_update = True
+            reload_backend = False
+            mode = "launch"
+            if channel_was_injected:
+                env.pop("APP_CHANNEL", None)
+                channel_was_injected = False
     except KeyboardInterrupt:
         print("\nDeteniendo la aplicación...")
         return 0
