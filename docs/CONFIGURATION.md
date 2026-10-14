@@ -40,19 +40,88 @@ son listas separadas por comas que alimentan los selectores de la interfaz.
 `CATALOG_MODEL` se conserva por compatibilidad y sirve como respaldo de
 `CATALOG_OPENAI_MODEL` cuando esta variable no se define.
 
+## OCR con OpenAI
+
+El OCR local continúa siendo el valor predeterminado. En equipos lentos se
+puede elegir OpenAI en Orquestación o al repetir OCR desde Revisión, sin cambiar
+la configuración general. Para dejar OpenAI como proveedor predeterminado:
+
+```dotenv
+OPENAI_API_KEY=tu_clave
+OCR_PROVIDER=openai
+OCR_OPENAI_MODEL=gpt-6-luna
+```
+
+El selector ofrece `gpt-6-luna` como alternativa económica y
+`gpt-6.1-sol` para comparaciones puntuales. Ambos usan Responses API,
+razonamiento `low` y detalle de imagen `original`, recomendado para OCR y texto
+pequeño. Cada imagen conserva su propio límite de
+`OCR_TIMEOUT_SECONDS`. La extracción posterior del ISBN usa el mismo proveedor
+y modelo, de modo que elegir OpenAI no inicia un segundo modelo local.
+
+## Catalogación con OpenAI
+
+Para usar OpenAI en la fase de catalogación, configura estos valores en
+`.env`:
+
+```dotenv
+OPENAI_API_KEY=tu_clave
+CATALOG_PROVIDER=openai
+CATALOG_OPENAI_MODEL=gpt-6-luna
+```
+
+El selector de Orquestación y el de Revisión ofrecen modelos con un
+perfil propio. La aplicación elige automáticamente la API y solo envía
+los parámetros compatibles:
+
+| Modelo | API | Razonamiento | Temperatura | Respuesta |
+| --- | --- | --- | --- | --- |
+| `gpt-6-luna` | Responses | `low` | No se envía | JSON estructurado |
+| `gpt-6.1-sol` | Responses | `low` | No se envía | JSON estructurado |
+| `gpt-4o-mini` | Responses | No aplicable | `0` | JSON estructurado |
+
+`gpt-6-luna` es el valor recomendado y predeterminado para OpenAI. El usuario
+puede elegir manualmente `gpt-6.1-sol` en Orquestación o Revisión para fichas
+especialmente complejas. El contrato JSON contiene los campos de la ficha y
+sus listas cerradas, por lo que la respuesta se valida antes de guardarse. Los
+nombres de modelo antiguos que ya estuvieran en una configuración se mantienen
+mediante un perfil de compatibilidad, pero no aparecen como opciones
+recomendadas.
+
 Los lotes del flujo de trabajo no tienen un tiempo de espera HTTP global. Cada
 operación externa
 tiene su propio límite, que se reinicia en cada llamada y en cada libro:
 
 - `REQUEST_TIMEOUT_SECONDS` limita cada petición a Google Books, Open Library,
   ISBNdb y la descarga de una portada (20 segundos por defecto).
-- `LLM_TIMEOUT_SECONDS` limita cada llamada de OCR o catalogación (300 segundos
-  por defecto).
-- `OLLAMA_TIMEOUT_SECONDS` permite usar otro límite solo para Ollama; si queda
-  vacío, hereda `LLM_TIMEOUT_SECONDS`.
+- `OCR_TIMEOUT_SECONDS` limita cada imagen enviada al OCR (60 segundos por
+  defecto). El contador se reinicia para cada imagen.
+- `LLM_TIMEOUT_SECONDS` limita las demás llamadas a modelos, como la
+  catalogación y la extracción de ISBN (300 segundos por defecto).
+- `OLLAMA_TIMEOUT_SECONDS` permite usar otro límite general para Ollama; si
+  queda vacío, hereda `LLM_TIMEOUT_SECONDS`. Las imágenes OCR usan siempre
+  `OCR_TIMEOUT_SECONDS`.
 
-Si una llamada agota su tiempo, ese libro sigue la ruta normal de reintento y
-revisión. El lote continúa con el siguiente libro cuando termina esa ruta.
+Si una imagen agota el límite de OCR, el libro pasa directamente a Revisión con
+la causa `ocr_timeout` y una recomendación de recortar manualmente la
+fotografía para retirar texto borroso de otras páginas. No se consume otro
+reintento automático y el lote continúa con el ID siguiente. Los demás
+timeouts siguen la ruta normal de reintento y revisión.
+
+Los lotes iniciados desde Orquestación se ejecutan en segundo plano y admiten
+una parada cooperativa desde el botón `Detener`. La llamada externa que ya está
+en curso termina o alcanza su tiempo máximo; después no se inicia otra etapa,
+el libro sale de `running` y recupera la última etapa válida deducible de sus
+datos. Se omite el resto del lote y no empieza el barrido posterior de portadas.
+Los reintentos de Revisión entran en el mismo gestor y aparecen en Orquestación.
+El botón `Actualizar` consulta el progreso guardado por el backend. El panel
+conserva por separado el avance del flujo principal y el de las portadas,
+además de identificar el libro que se está procesando.
+
+El backend crea un bloqueo asociado a `DB_PATH` para impedir que dos instancias
+usen simultáneamente la misma base. El cierre gestionado por `appctl` detiene
+también los procesos hijos registrados y fuerza su terminación si no responden
+al cierre normal.
 
 ## Configurar Google Books
 
@@ -73,7 +142,7 @@ cliente OAuth, una cuenta de servicio ni una pantalla de consentimiento.
 ### Crear el proyecto y habilitar Books API
 
 1. Abre [Crear un proyecto de Google Cloud](https://console.cloud.google.com/projectcreate).
-2. Escribe un nombre reconocible, por ejemplo `media-catalog-books`, y crea el
+2. Escribe un nombre reconocible, por ejemplo `MC Books`, y crea el
    proyecto. Si la cuenta pertenece a una organización, selecciona la
    organización y la ubicación que correspondan.
 3. Cuando termine, usa el selector de la barra superior para dejar activo ese
@@ -92,7 +161,7 @@ El nombre que debe aparecer es **Books API** y su identificador de servicio es
    [APIs y servicios > Credenciales](https://console.cloud.google.com/apis/credentials).
 2. Pulsa **Crear credenciales** y elige **Clave de API**. Crea una clave
    estándar; no la vincules a una cuenta de servicio.
-3. Ponle un nombre descriptivo, por ejemplo `media-catalog-books-local`.
+3. Ponle un nombre descriptivo, por ejemplo `mc-books-local`.
 4. En **Restricciones de API**, elige **Restringir clave** y selecciona
    únicamente **Books API**.
 5. En **Restricciones de aplicación**:
@@ -182,7 +251,7 @@ Para este repositorio se pueden usar las siguientes respuestas:
 - **What is the best contact email?**: el correo real de contacto que se
   guardará en `.env`.
 - **What is the user-agent for your application?**:
-  `media-catalog-books/1.0 (correo@ejemplo.com)`.
+  `MC-Books/1.2.0 (correo@ejemplo.com)`.
 - **What APIs or services are used by your application?**:
   `ISBN/Edition JSON API, Search API (search.json), Covers API`.
 - **Please describe the nature of your application**:

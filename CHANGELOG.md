@@ -2,6 +2,67 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-14
+
+### Añadido
+
+- Ayudas de formato al pulsar el nombre de los campos de persona, valores
+  múltiples, ISBN, año, volumen, medidas, peso, cantidad y precio. Las mismas
+  instrucciones se incluyen en los comentarios del Excel y en
+  `docs/FORM_FIELDS.md`.
+
+### Cambiado
+
+- La catalogación con OpenAI usa `gpt-6-luna` con razonamiento `low` como
+  modelo predeterminado y permite elegir manualmente `gpt-6.1-sol` para las
+  fichas más complejas. Ambos usan Responses API y un esquema JSON estricto;
+  cada modelo seleccionable dispone de un perfil propio para no enviar
+  parámetros incompatibles como `temperature`.
+
+- El nombre comercial visible de la aplicación pasa a ser **MC Books**. Se
+  conservan `media-catalog-books` y las firmas históricas como identificadores
+  técnicos para no romper instalaciones, rutas ni archivos existentes.
+- La plantilla de revisión externa pasa a la versión 2 y ordena sus columnas por
+  grupos lógicos. `Alto`, `Ancho` y `Fondo` quedan contiguos y `Peso` aparece a
+  continuación. Las plantillas anteriores deben volver a exportarse.
+- La repetición de una fase desde Revisión permite elegir el límite del flujo,
+  los reintentos, los proveedores y modelos de OCR y catalogación, la reducción
+  de imagen y la descarga automática de portadas, igual que en Orquestación.
+- La interfaz adopta encabezados y selectores de módulo coherentes, un estado
+  de servicio compacto, una jerarquía visual más clara para botones, métricas,
+  formularios y avisos, y confirmaciones visibles durante las operaciones largas.
+- Orquestación muestra el estado completo del módulo antes de las órdenes de
+  ejecución y agrupa la cola de revisión, los detalles y el grafo técnico en
+  secciones desplegables. Exportación muestra la vista previa antes de generar
+  el archivo y Revisión simplifica los filtros y la navegación entre libros.
+  El menú lateral usa nombres, tildes e iconos propios para todas las fases.
+- Orquestación ejecuta los lotes en segundo plano y permite detenerlos junto al
+  botón de actualización. La parada espera únicamente a que termine de forma
+  segura la operación externa activa, no inicia otra etapa, devuelve el libro a
+  la última etapa válida guardada y evita el barrido posterior de portadas.
+  También impide lanzar dos ejecuciones sobre el mismo módulo o dos procesos de
+  backend sobre la misma base de datos.
+- Los reintentos configurados desde Revisión se envían al gestor de trabajos de
+  Orquestación, donde muestran su progreso y admiten la misma parada controlada.
+- Cada imagen OCR dispone de un límite específico de 60 segundos configurable
+  mediante `OCR_TIMEOUT_SECONDS`. Si lo agota, el libro pasa directamente a
+  Revisión con la causa `ocr_timeout`, se recomienda recortar manualmente la
+  fotografía y el lote continúa con el ID siguiente.
+- OpenAI queda disponible como alternativa remota de OCR para equipos lentos.
+  `gpt-6-luna` usa Responses API, razonamiento `low` y detalle `original`; el
+  OCR local continúa siendo el proveedor predeterminado. La extracción de ISBN
+  usa el mismo proveedor elegido y no arranca un segundo modelo local.
+- El formulario vuelve a ocupar todo el ancho disponible cuando se contrae el
+  menú lateral.
+- Las revisiones de OCR/ISBN ofrecen una acción directa que valida y guarda el
+  ISBN y saca el libro de revisión en un solo paso.
+- El panel de la ejecución muestra el tramo solicitado, el libro en curso y
+  barras `procesados/solicitados` separadas para el flujo principal y el barrido
+  de portadas.
+- Catálogo garantiza la creación automática de la ficha editable aunque sus
+  datos ya existieran y la llamada al modelo se omita. La sincronización masiva
+  queda como una herramienta de mantenimiento para datos antiguos.
+
 ## [1.1.0] - 2026-10-10
 
 ### Añadido

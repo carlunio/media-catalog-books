@@ -72,7 +72,7 @@ def test_backend_imports_without_external_api_keys(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert app.version == "1.1.0"
+    assert app.version == "1.2.0"
 
 
 def test_schema_is_initialized_with_incremental_migrations(tmp_path, monkeypatch):
@@ -738,6 +738,13 @@ def test_review_workbook_round_trip_is_unicode_and_regenerates_description(
 
     sheet = workbook["Fichas"]
     columns = _review_sheet_columns(sheet)
+    assert columns["Alto"] < columns["Ancho"] < columns["Fondo"] < columns["Peso"]
+    assert sheet.cell(row=1, column=columns["Autor"]).comment is not None
+    assert (
+        "Apellidos, Nombre" in sheet.cell(row=1, column=columns["Autor"]).comment.text
+    )
+    assert "número romano" in sheet.cell(row=1, column=columns["Volumen"]).comment.text
+    assert workbook.properties.creator == "MC Books"
     assert sheet.cell(row=2, column=columns["Ref. del artículo"]).number_format == "@"
     assert sheet.cell(row=2, column=columns["Ref. del artículo"]).protection.locked
     assert not sheet.cell(row=2, column=columns["Título"]).protection.locked
@@ -884,3 +891,91 @@ def test_review_workbook_blocks_invalid_closed_values_and_preserves_consolidatio
             WHERE b.id = '01A0001'
             """).fetchone()
     assert saved == ("Vendido", "consolidated")
+
+
+def test_workflow_background_job_control_endpoints(tmp_path, monkeypatch):
+    app = _load_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    jobs = importlib.import_module("src.backend.services.workflow_jobs")
+
+    started_payloads = []
+    monkeypatch.setattr(
+        jobs,
+        "start_job",
+        lambda **kwargs: started_payloads.append(kwargs)
+        or {
+            "job_id": "job-1",
+            "block": "A",
+            "module": "01",
+            "status": "queued",
+        },
+    )
+    monkeypatch.setattr(
+        jobs,
+        "current_job",
+        lambda **kwargs: {
+            "job_id": "job-1",
+            "block": kwargs["block"],
+            "module": kwargs["module"],
+            "status": "running",
+        },
+    )
+    monkeypatch.setattr(
+        jobs,
+        "get_job",
+        lambda job_id: {"job_id": job_id, "status": "running"},
+    )
+    monkeypatch.setattr(
+        jobs,
+        "request_stop",
+        lambda job_id: {"job_id": job_id, "status": "stopping"},
+    )
+
+    started = client.post(
+        "/workflow/jobs",
+        json={
+            "block": "A",
+            "module": "01",
+            "limit": 20,
+            "start_stage": "ocr",
+            "stop_after": "metadata",
+        },
+    )
+    assert started.status_code == 202
+    assert started.json()["job"]["job_id"] == "job-1"
+    assert started_payloads[0]["block"] == "A"
+    assert started_payloads[0]["module"] == "01"
+    assert started_payloads[0]["stop_after"] == "metadata"
+
+    review_retry = client.post(
+        "/workflow/jobs",
+        json={
+            "book_id": "01A0001",
+            "block": "A",
+            "module": "01",
+            "limit": 1,
+            "start_stage": "metadata",
+            "stop_after": "catalog",
+            "action": "retry_from_metadata",
+            "overwrite": True,
+        },
+    )
+    assert review_retry.status_code == 202
+    assert started_payloads[1]["book_id"] == "01A0001"
+    assert started_payloads[1]["action"] == "retry_from_metadata"
+    assert started_payloads[1]["overwrite"] is True
+
+    current = client.get(
+        "/workflow/jobs/current",
+        params={"block": "A", "module": "01"},
+    )
+    assert current.status_code == 200
+    assert current.json()["job"]["status"] == "running"
+
+    status = client.get("/workflow/jobs/job-1")
+    assert status.status_code == 200
+    assert status.json()["job"]["job_id"] == "job-1"
+
+    stopped = client.post("/workflow/jobs/job-1/stop")
+    assert stopped.status_code == 200
+    assert stopped.json()["job"]["status"] == "stopping"

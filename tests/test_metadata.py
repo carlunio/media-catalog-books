@@ -188,7 +188,7 @@ def test_open_library_fetches_exact_edition_and_small_work_context(monkeypatch):
     assert search_kwargs["params"]["isbn"] == "9788412280043"
     assert search_kwargs["params"]["email"] == "catalog@example.test"
     assert search_kwargs["headers"] == {
-        "User-Agent": "media-catalog-books/1.0 (catalog@example.test)"
+        "User-Agent": "MC-Books/1.2.0 (catalog@example.test)"
     }
 
     assert result["requested_isbn"] == "9788412280043"

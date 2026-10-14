@@ -8,7 +8,8 @@ def test_project_meta_reads_pyproject_version():
     meta = get_app_meta()
 
     assert meta.project_name == "media-catalog-books"
-    assert meta.version == "1.1.0"
+    assert meta.app_name == "MC Books"
+    assert meta.version == "1.2.0"
     assert meta.changelog_path.name == "CHANGELOG.md"
 
 
@@ -27,4 +28,5 @@ def test_project_meta_falls_back_to_installed_distribution(tmp_path, monkeypatch
         get_app_meta.cache_clear()
 
     assert meta.project_name == "media-catalog-books"
+    assert meta.app_name == "MC Books"
     assert meta.version == "9.8.7"
