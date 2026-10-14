@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-14
+
 ### Añadido
 
 - El menú lateral comprueba periódicamente la última release estable de GitHub. Cuando hay una versión nueva, permite cerrar los servicios, actualizar la instalación gestionada y volver a abrir MC Books desde el mismo botón.

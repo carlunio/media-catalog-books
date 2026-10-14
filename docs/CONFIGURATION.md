@@ -251,7 +251,7 @@ Para este repositorio se pueden usar las siguientes respuestas:
 - **What is the best contact email?**: el correo real de contacto que se
   guardará en `.env`.
 - **What is the user-agent for your application?**:
-  `MC-Books/1.2.0 (correo@ejemplo.com)`.
+  `MC-Books/1.2.1 (correo@ejemplo.com)`.
 - **What APIs or services are used by your application?**:
   `ISBN/Edition JSON API, Search API (search.json), Covers API`.
 - **Please describe the nature of your application**:

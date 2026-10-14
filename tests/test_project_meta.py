@@ -9,7 +9,7 @@ def test_project_meta_reads_pyproject_version():
 
     assert meta.project_name == "media-catalog-books"
     assert meta.app_name == "MC Books"
-    assert meta.version == "1.2.0"
+    assert meta.version == "1.2.1"
     assert meta.changelog_path.name == "CHANGELOG.md"
 
 
