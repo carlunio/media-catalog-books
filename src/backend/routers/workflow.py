@@ -17,7 +17,7 @@ from ..schemas.workflow import (
     WorkflowReviewRequest,
     WorkflowRunRequest,
 )
-from ..services import books, workflow
+from ..services import books, workflow, workflow_jobs
 
 router = APIRouter()
 
@@ -30,30 +30,70 @@ def _resolve_ocr_resize_to_1800(value: bool | None) -> bool:
     return OCR_RESIZE_TO_1800_DEFAULT if value is None else bool(value)
 
 
+def _workflow_run_kwargs(payload: WorkflowRunRequest) -> dict:
+    return {
+        "book_id": payload.book_id,
+        "block": payload.block,
+        "module": payload.module,
+        "limit": payload.limit,
+        "start_stage": payload.start_stage,
+        "stop_after": payload.stop_after,
+        "action": payload.action,
+        "overwrite": payload.overwrite,
+        "download_cover_after_metadata": payload.download_cover_after_metadata,
+        "max_attempts": _resolve_max_attempts(payload.max_attempts),
+        "ocr_provider": payload.ocr_provider or OCR_PROVIDER,
+        "ocr_model": payload.ocr_model,
+        "ocr_resize_to_1800": _resolve_ocr_resize_to_1800(payload.ocr_resize_to_1800),
+        "catalog_provider": payload.catalog_provider or CATALOG_PROVIDER,
+        "catalog_model": payload.catalog_model,
+    }
+
+
 @router.post("/workflow/run")
 def workflow_run(payload: WorkflowRunRequest):
     try:
-        return workflow.run_batch(
-            book_id=payload.book_id,
-            block=payload.block,
-            module=payload.module,
-            limit=payload.limit,
-            start_stage=payload.start_stage,
-            stop_after=payload.stop_after,
-            action=payload.action,
-            overwrite=payload.overwrite,
-            download_cover_after_metadata=payload.download_cover_after_metadata,
-            max_attempts=_resolve_max_attempts(payload.max_attempts),
-            ocr_provider=payload.ocr_provider or OCR_PROVIDER,
-            ocr_model=payload.ocr_model,
-            ocr_resize_to_1800=_resolve_ocr_resize_to_1800(payload.ocr_resize_to_1800),
-            catalog_provider=payload.catalog_provider or CATALOG_PROVIDER,
-            catalog_model=payload.catalog_model,
-        )
+        return workflow.run_batch(**_workflow_run_kwargs(payload))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/workflow/jobs", status_code=202)
+def workflow_job_start(payload: WorkflowRunRequest):
+    try:
+        return {"job": workflow_jobs.start_job(**_workflow_run_kwargs(payload))}
+    except workflow_jobs.WorkflowJobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/workflow/jobs/current")
+def workflow_job_current(block: str, module: str):
+    try:
+        return {"job": workflow_jobs.current_job(block=block, module=module)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workflow/jobs/{job_id}")
+def workflow_job_status(job_id: str):
+    try:
+        return {"job": workflow_jobs.get_job(job_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workflow job not found") from exc
+
+
+@router.post("/workflow/jobs/{job_id}/stop")
+def workflow_job_stop(job_id: str):
+    try:
+        return {"job": workflow_jobs.request_stop(job_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workflow job not found") from exc
 
 
 @router.get("/workflow/graph")
@@ -109,6 +149,7 @@ def workflow_review_action(book_id: str, payload: WorkflowReviewRequest):
         result = workflow.review_action(
             book_id,
             action=payload.action,
+            stop_after=payload.stop_after,
             download_cover_after_metadata=payload.download_cover_after_metadata,
             max_attempts=_resolve_max_attempts(payload.max_attempts),
             ocr_provider=payload.ocr_provider or OCR_PROVIDER,

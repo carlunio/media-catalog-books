@@ -127,3 +127,64 @@ def test_legacy_open_library_aggregate_is_only_work_context():
 def test_catalog_prompt_explains_work_context_usage():
     assert "sinopsis, descripción y temas/materias" in catalog.CATALOG_SYSTEM_PROMPT
     assert "edition_for_requested_isbn" in catalog.CATALOG_SYSTEM_PROMPT
+
+
+def test_existing_catalog_ensures_form_before_skipping(monkeypatch):
+    sync_calls = []
+    monkeypatch.setattr(
+        catalog.books,
+        "get_book",
+        lambda book_id: {
+            "id": book_id,
+            "catalog_status": "built",
+            "form_status": "not_started",
+        },
+    )
+    monkeypatch.setattr(
+        catalog.books,
+        "sync_core_book_from_catalog",
+        lambda book_id: sync_calls.append(book_id) or {"id": book_id},
+    )
+    monkeypatch.setattr(
+        catalog,
+        "build_catalog_payload",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("the model must not be called for an existing catalog")
+        ),
+    )
+
+    result = catalog.run_one("01A0001", overwrite=False)
+
+    assert result == {
+        "id": "01A0001",
+        "status": "skipped",
+        "reason": "catalog already present",
+    }
+    assert sync_calls == ["01A0001"]
+
+
+def test_openai_catalog_uses_system_instructions_and_structured_schema(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(catalog, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        catalog,
+        "openai_text_chat",
+        lambda **kwargs: captured.update(kwargs) or '{"titulo": "Libro"}',
+    )
+
+    result = catalog._call_catalog_llm(
+        provider="openai",
+        model="gpt-6.1-sol",
+        system_prompt="System instructions",
+        user_prompt="Book sources",
+    )
+
+    assert result == '{"titulo": "Libro"}'
+    assert captured["model"] == "gpt-6.1-sol"
+    assert captured["instructions"] == "System instructions"
+    assert captured["prompt"] == "Book sources"
+    assert captured["response_schema"] is catalog.CATALOG_RESPONSE_SCHEMA
+    assert set(catalog.CATALOG_RESPONSE_SCHEMA["required"]) == set(
+        catalog.CATALOG_RESPONSE_SCHEMA["properties"]
+    )
+    assert catalog.CATALOG_RESPONSE_SCHEMA["additionalProperties"] is False

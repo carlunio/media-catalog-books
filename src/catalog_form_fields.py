@@ -52,7 +52,57 @@ FORM_FIELD_LABELS: dict[str, str] = {
     "descripcion": "Descripción",
 }
 
-FORM_FIELD_ORDER: tuple[str, ...] = tuple(FORM_FIELD_LABELS)
+FORM_FIELD_ORDER: tuple[str, ...] = (
+    "tipo_articulo",
+    "titulo",
+    "titulo_corto",
+    "subtitulo",
+    "titulo_completo",
+    "autor",
+    "pais_autor",
+    "editorial",
+    "pais_publicacion",
+    "anio",
+    "isbn",
+    "idioma",
+    "edicion",
+    "numero_impresion",
+    "coleccion",
+    "numero_coleccion",
+    "obra_completa",
+    "volumen",
+    "traductor",
+    "ilustrador",
+    "editor",
+    "fotografia_de",
+    "introduccion_de",
+    "epilogo_de",
+    "ilustraciones",
+    "estado_stock",
+    "estado_carga",
+    "categoria",
+    "genero",
+    "palabras_clave",
+    "encuadernacion",
+    "detalle_encuadernacion",
+    "estado_conservacion",
+    "estado_cubierta",
+    "desperfectos",
+    "dedicatorias",
+    "paginas",
+    "alto",
+    "ancho",
+    "fondo",
+    "peso",
+    "url_imagenes",
+    "plantilla_envio",
+    "cantidad",
+    "precio",
+    "catalogo_1",
+    "catalogo_2",
+    "catalogo_3",
+    "descripcion",
+)
 
 READ_ONLY_FIELDS: frozenset[str] = frozenset(
     {"titulo_corto", "subtitulo", "titulo_completo"}
@@ -118,6 +168,75 @@ PERSON_NAME_FIELDS: frozenset[str] = frozenset(
         "epilogo_de",
     }
 )
+
+MULTI_VALUE_FIELDS: frozenset[str] = frozenset(
+    {
+        *PERSON_NAME_FIELDS,
+        "pais_autor",
+        "pais_publicacion",
+        "idioma",
+        "palabras_clave",
+        "url_imagenes",
+    }
+)
+
+FORM_FIELD_HELP: dict[str, str] = {
+    **{
+        field: (
+            "Escribe cada persona como «Apellidos, Nombre». Separa varias "
+            "personas con punto y coma (;). No reordenes automáticamente "
+            "seudónimos, entidades ni nombres dudosos."
+        )
+        for field in PERSON_NAME_FIELDS
+    },
+    "pais_autor": (
+        "Escribe el país en español. Si hay varios autores de países distintos, "
+        "separa los países con punto y coma (;), conserva el orden de Autor y no "
+        "repitas valores."
+    ),
+    "pais_publicacion": (
+        "Escribe el país en español. Si hay varios países de publicación, "
+        "sepáralos con punto y coma (;)."
+    ),
+    "anio": "Escribe el año de publicación de esta edición con cuatro cifras.",
+    "isbn": (
+        "Escribe un ISBN-10 o ISBN-13 sin espacios ni guiones. En un ISBN-10 "
+        "se admite X como último carácter."
+    ),
+    "idioma": (
+        "Escribe el nombre del idioma en español y en minúsculas. Separa "
+        "varios idiomas con punto y coma (;)."
+    ),
+    "numero_coleccion": (
+        "Escribe solo el número entero que ocupa el libro en la colección, sin "
+        "«nº» ni otros textos."
+    ),
+    "volumen": (
+        "Escribe solo el número romano en mayúsculas, sin «vol.» (por ejemplo, "
+        "«IV»). Para un intervalo usa «I-III» y para volúmenes separados, "
+        "«I, III». También se admite «OBRA COMPLETA»."
+    ),
+    "palabras_clave": (
+        "Escribe etiquetas temáticas en español separadas por comas. También se "
+        "aceptan punto y coma o saltos de línea. La marca NOISBN se gestiona "
+        "automáticamente según el ISBN."
+    ),
+    "paginas": "Escribe un número entero sin añadir «pág.» ni otras unidades.",
+    "alto": "Escribe el alto en centímetros como número entero, sin la unidad.",
+    "ancho": "Escribe el ancho en centímetros como número entero, sin la unidad.",
+    "fondo": "Escribe el fondo en centímetros como número entero, sin la unidad.",
+    "peso": "Escribe el peso en gramos como número entero, sin la unidad.",
+    "url_imagenes": (
+        "Escribe nombres de imagen normalizados y sepáralos con espacios; por "
+        "ejemplo: «03B0001.jpg 03B0001_2.jpg»."
+    ),
+    "cantidad": "Escribe el número entero de ejemplares disponibles.",
+    "precio": (
+        "Escribe el importe sin el símbolo del euro. Se admiten coma o punto "
+        "como separador decimal y se guardan dos decimales."
+    ),
+}
+
 
 LABEL_COLORS: dict[str, str] = {
     "lbl-blue": "A4B8D3",

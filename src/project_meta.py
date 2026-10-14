@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 DEFAULT_PROJECT_NAME = "media-catalog-books"
+DEFAULT_APP_NAME = "MC Books"
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ def get_app_meta() -> AppMeta:
 
     return AppMeta(
         project_name=project_name,
-        app_name=project_name.replace("-", " ").title(),
+        app_name=DEFAULT_APP_NAME,
         version=version,
         channel=channel,
         changelog_path=CHANGELOG_PATH,

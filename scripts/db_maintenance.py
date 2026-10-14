@@ -56,7 +56,7 @@ def _prune_catalog_raw_output(con: duckdb.DuckDBPyConnection) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="DuckDB maintenance for media-catalog-books"
+        description="Mantenimiento de DuckDB para MC Books"
     )
     parser.add_argument(
         "--db",

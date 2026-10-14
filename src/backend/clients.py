@@ -2,6 +2,7 @@ from typing import Any
 
 import requests
 
+from ..llm_models import get_openai_model_profile
 from .config import (
     LLM_TIMEOUT_SECONDS,
     OLLAMA_BASE_URL,
@@ -246,55 +247,125 @@ def openai_vision_chat(
     model: str,
     prompt: str,
     image_data_url: str,
+    timeout: float = LLM_TIMEOUT_SECONDS,
 ) -> str:
-    from openai import OpenAI
+    from openai import APITimeoutError, OpenAI
 
-    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
+    client = OpenAI(api_key=api_key, timeout=timeout)
+    profile = get_openai_model_profile(model)
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_data_url},
-                        },
-                    ],
-                }
-            ],
-        )
+        if profile.endpoint == "responses":
+            request: dict[str, Any] = {
+                "model": model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {
+                                "type": "input_image",
+                                "image_url": image_data_url,
+                                "detail": profile.vision_detail,
+                            },
+                        ],
+                    }
+                ],
+                "store": False,
+                "max_output_tokens": 5000,
+            }
+            if profile.reasoning_effort is not None:
+                request["reasoning"] = {"effort": profile.reasoning_effort}
+            if profile.temperature is not None:
+                request["temperature"] = profile.temperature
+            response = client.responses.create(**request)
+            output = str(response.output_text or "").strip()
+        else:
+            request = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_data_url,
+                                    "detail": profile.vision_detail,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            }
+            if profile.temperature is not None:
+                request["temperature"] = profile.temperature
+            response = client.chat.completions.create(**request)
+            output = str(response.choices[0].message.content or "").strip()
+    except APITimeoutError as exc:
+        raise ClientTimeoutError(
+            f"OpenAI vision timed out after {timeout} seconds"
+        ) from exc
     except Exception as exc:
         raise ClientError(f"OpenAI vision call failed: {exc}") from exc
 
-    text = str(response.choices[0].message.content or "").strip()
-    if not text:
+    if not output:
         raise ClientError("OpenAI vision returned empty content")
-    return text
+    return output
 
 
-def openai_text_chat(*, api_key: str, model: str, prompt: str) -> str:
+def openai_text_chat(
+    *,
+    api_key: str,
+    model: str,
+    prompt: str,
+    instructions: str | None = None,
+    response_schema: dict[str, Any] | None = None,
+    timeout: float = LLM_TIMEOUT_SECONDS,
+) -> str:
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
+    client = OpenAI(api_key=api_key, timeout=timeout)
+    profile = get_openai_model_profile(model)
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        if profile.endpoint == "responses":
+            request: dict[str, Any] = {
+                "model": model,
+                "input": prompt,
+                "store": False,
+            }
+            if instructions:
+                request["instructions"] = instructions
+            if profile.reasoning_effort is not None:
+                request["reasoning"] = {"effort": profile.reasoning_effort}
+            if profile.temperature is not None:
+                request["temperature"] = profile.temperature
+            if response_schema is not None and profile.structured_outputs:
+                request["text"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "book_catalog",
+                        "strict": True,
+                        "schema": response_schema,
+                    }
+                }
+            response = client.responses.create(**request)
+            text = str(response.output_text or "").strip()
+        else:
+            messages: list[dict[str, str]] = []
+            if instructions:
+                messages.append({"role": "system", "content": instructions})
+            messages.append({"role": "user", "content": prompt})
+            request = {"model": model, "messages": messages}
+            if profile.temperature is not None:
+                request["temperature"] = profile.temperature
+            response = client.chat.completions.create(**request)
+            text = str(response.choices[0].message.content or "").strip()
     except Exception as exc:
         raise ClientError(f"OpenAI text call failed: {exc}") from exc
 
-    text = str(response.choices[0].message.content or "").strip()
     if not text:
         raise ClientError("OpenAI text returned empty content")
     return text

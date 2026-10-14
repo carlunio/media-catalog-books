@@ -16,6 +16,7 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from ...catalog_form_fields import (
+    FORM_FIELD_HELP,
     FORM_FIELD_LABELS,
     FORM_FIELD_ORDER,
     IMPORTANT_FIELDS,
@@ -31,7 +32,7 @@ from ..database import get_connection
 from . import books
 
 WORKBOOK_MAGIC = "media-catalog-books:external-review"
-WORKBOOK_FORMAT_VERSION = "1"
+WORKBOOK_FORMAT_VERSION = "2"
 MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 
 DATA_SHEET = "Fichas"
@@ -391,21 +392,22 @@ def create_review_workbook(
         )
         cell.border = Border(bottom=THIN_GREY, right=THIN_GREY)
 
+        format_help = FORM_FIELD_HELP.get(field)
         if field in WORKBOOK_READ_ONLY_FIELDS or field in TECHNICAL_FIELDS:
             message = "Columna informativa; no se importa."
         elif field in SELECTABLE_WITH_CUSTOM_VALUE_FIELDS:
             message = "Desplegable ampliable: también admite valores nuevos."
         elif field in SELECTABLE_FIELDS:
             message = "Campo cerrado: usa un valor del desplegable."
-        elif field in PERSON_NAME_FIELDS:
-            message = "Formato recomendado: Apellidos, Nombre."
+        elif format_help:
+            message = format_help
         elif field in INTEGER_FIELDS:
             message = "Número entero."
         elif field in DECIMAL_FIELDS:
             message = "Número decimal; Excel puede mostrar coma o punto."
         else:
             message = "Campo editable."
-        cell.comment = Comment(message, "Media Catalog Books")
+        cell.comment = Comment(message, "MC Books")
 
     sheet.row_dimensions[1].height = 42
 
@@ -463,7 +465,7 @@ def create_review_workbook(
     )
 
     workbook.active = workbook.sheetnames.index(DATA_SHEET)
-    workbook.properties.creator = "Media Catalog Books"
+    workbook.properties.creator = "MC Books"
     workbook.properties.title = f"Revisión de fichas {scope_block}/{scope_module}"
     workbook.properties.subject = "Revisión externa de fichas bibliográficas"
     workbook.properties.description = (

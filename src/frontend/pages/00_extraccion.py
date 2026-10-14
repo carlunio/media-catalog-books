@@ -8,6 +8,7 @@ try:
         api_get,
         api_post,
         configure_page,
+        render_page_header,
         load_stats,
         scope_params,
         select_module_scope,
@@ -18,16 +19,23 @@ except ModuleNotFoundError:  # pragma: no cover
         api_get,
         api_post,
         configure_page,
+        render_page_header,
         load_stats,
         scope_params,
         select_module_scope,
         show_backend_status,
     )
 
-configure_page("Extracción | Media Catalog Books")
+configure_page("Extracción | MC Books")
 
-st.title("Fase 0 · Extracción")
-st.caption("Extrae e indexa imágenes de créditos en DuckDB")
+render_page_header(
+    phase="0",
+    title="Extracción",
+    description=(
+        "Prepara, convierte e indexa las imágenes del módulo antes de iniciar "
+        "el flujo de catalogación."
+    ),
+)
 show_backend_status()
 
 scope_block, scope_module = select_module_scope(
@@ -39,10 +47,13 @@ if not scope_module:
 stats = load_stats(block=scope_block, module=scope_module)
 col_a, col_b, col_c = st.columns(3)
 col_a.metric("Total", stats.get("total", 0))
-col_b.metric("Pend. OCR", stats.get("needs_ocr", 0))
+col_b.metric("Pendientes de OCR", stats.get("needs_ocr", 0))
 col_c.metric("En revisión", stats.get("needs_workflow_review", 0))
 
-st.info("La carpeta de entrada debe respetar la estructura: data/input/A|B|C/01..99")
+st.caption(
+    "Estructura esperada: data/input/A|B|C/01..99. Primero se prepara un "
+    "plan; no se modifica ningún archivo durante el análisis."
+)
 
 default_folder = os.getenv("COVERS_DIR", "data/input")
 plan_state_key = "ingest_preparation_plan"
@@ -56,7 +67,8 @@ if stored_plan and (
     st.session_state.pop(plan_state_key, None)
     stored_plan = None
 
-with st.form("ingest_form"):
+st.subheader("1. Analizar las imágenes")
+with st.form("ingest_form", border=True):
     folder = st.text_input(
         "Carpeta de imágenes", value=default_folder, key="ingest_folder"
     )
@@ -90,7 +102,10 @@ with st.form("ingest_form"):
     )
 
     submitted = st.form_submit_button(
-        "Analizar módulo", icon=":material/preview:", type="primary"
+        "Analizar módulo",
+        icon=":material/preview:",
+        type="primary",
+        width="stretch",
     )
 
 if submitted:
@@ -107,7 +122,8 @@ if submitted:
         "delete_original_heic": bool(delete_original_heic and convert_heic),
     }
     try:
-        plan = api_post("/covers/ingest/plan", json=payload, timeout=900.0)
+        with st.spinner("Analizando nombres, secuencias y formatos de imagen…"):
+            plan = api_post("/covers/ingest/plan", json=payload, timeout=900.0)
         st.session_state[plan_state_key] = {"payload": payload, "plan": plan}
         st.session_state.pop(result_state_key, None)
         st.session_state.pop("ingest_confirmed", None)
@@ -120,7 +136,7 @@ if submitted:
 if stored_plan:
     plan = stored_plan["plan"]
     summary = plan.get("summary", {})
-    st.subheader("Cambios propuestos")
+    st.subheader("2. Revisar y confirmar los cambios")
     metric_a, metric_b, metric_c, metric_d = st.columns(4)
     metric_a.metric("Renombrados", summary.get("renames", 0))
     metric_b.metric("Conversiones", summary.get("conversions", 0))
@@ -180,6 +196,7 @@ if stored_plan:
         icon=":material/check_circle:",
         type="primary",
         key="apply_ingest_plan",
+        width="stretch",
     ):
         if not confirmed:
             st.error("Revisa la lista y marca la confirmación antes de continuar.")
@@ -187,9 +204,10 @@ if stored_plan:
             confirmed_payload = dict(stored_plan["payload"])
             confirmed_payload["preparation_fingerprint"] = plan["fingerprint"]
             try:
-                result = api_post(
-                    "/covers/ingest", json=confirmed_payload, timeout=900.0
-                )
+                with st.spinner("Aplicando los cambios e indexando el módulo…"):
+                    result = api_post(
+                        "/covers/ingest", json=confirmed_payload, timeout=900.0
+                    )
                 st.session_state[result_state_key] = result
                 st.session_state.pop(plan_state_key, None)
                 st.rerun()
@@ -214,22 +232,32 @@ if last_result:
     with st.expander("Ver informe completo"):
         st.json(last_result)
 
-st.subheader("Vista rápida de libros")
+st.subheader("Libros indexados")
 
-stage_filter = st.selectbox(
-    "Filtrar por etapa",
-    [
-        "(todas)",
-        "ocr",
-        "metadata",
-        "catalog",
-        "cover",
-        "review",
-        "done",
-        "needs_workflow_review",
-    ],
-)
-limit = st.number_input("Límite", min_value=1, max_value=5000, value=200)
+stage_labels = {
+    "(todas)": "Todas",
+    "ocr": "OCR",
+    "metadata": "Metadatos",
+    "catalog": "Catalogación",
+    "cover": "Portada",
+    "review": "Revisión",
+    "done": "Completados",
+    "needs_workflow_review": "Necesitan revisión",
+}
+filter_col, limit_col = st.columns([2, 1])
+with filter_col:
+    stage_filter = st.selectbox(
+        "Etapa",
+        list(stage_labels),
+        format_func=lambda value: stage_labels.get(str(value), str(value)),
+    )
+with limit_col:
+    limit = st.number_input(
+        "Límite de resultados",
+        min_value=1,
+        max_value=5000,
+        value=200,
+    )
 
 try:
     params = {"limit": int(limit), **scope_params(scope_block, scope_module)}
@@ -260,4 +288,4 @@ try:
     else:
         st.info("No hay registros para el filtro actual.")
 except Exception as exc:
-    st.error(f"No se pudo cargar /books: {exc}")
+    st.error(f"No se pudo cargar la lista de libros: {exc}")

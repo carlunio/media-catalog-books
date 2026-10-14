@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Media Catalog Books - Preparar
+Name=MC Books - Preparar
 Comment=Crea el entorno virtual e instala dependencias
 Terminal=true
 Icon=utilities-terminal

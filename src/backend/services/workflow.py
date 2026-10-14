@@ -1,5 +1,6 @@
 import importlib.util
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from ..config import WORKFLOW_MAX_ATTEMPTS
@@ -79,6 +80,31 @@ def _normalize_stage(value: str | None, *, default: str) -> str:
     if stage not in VALID_STAGES:
         raise ValueError(f"Invalid stage: {value}")
     return stage
+
+
+def _stop_was_requested(stop_requested: Callable[[], bool] | None) -> bool:
+    if stop_requested is None:
+        return False
+    try:
+        return bool(stop_requested())
+    except Exception:
+        return False
+
+
+def _report_progress(
+    progress_callback: Callable[[str, int, int, dict[str, Any] | None], None] | None,
+    *,
+    phase: str,
+    processed: int,
+    requested: int,
+    last_item: dict[str, Any] | None,
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(phase, processed, requested, last_item)
+    except Exception:
+        pass
 
 
 def graph_definition() -> dict[str, Any]:
@@ -243,6 +269,7 @@ def run_one(
     ocr_resize_to_1800: bool = False,
     catalog_provider: str | None = None,
     catalog_model: str | None = None,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
@@ -281,6 +308,7 @@ def run_one(
             "ocr_resize_to_1800": bool(ocr_resize_to_1800),
             "catalog_provider": catalog_provider,
             "catalog_model": catalog_model,
+            "stop_requested": stop_requested,
             "stop_pipeline": False,
         }
     )
@@ -392,6 +420,10 @@ def run_cover_batch(
     module: str | None = None,
     limit: int | None = 20,
     overwrite: bool = False,
+    stop_requested: Callable[[], bool] | None = None,
+    progress_callback: (
+        Callable[[str, int, int, dict[str, Any] | None], None] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Run the optional cover branch, including consolidated books."""
     scope_block, scope_module = books.resolve_scope(block, module, require=True)
@@ -414,7 +446,25 @@ def run_cover_batch(
         )
 
     items: list[dict[str, Any]] = []
+    stopped = False
+    _report_progress(
+        progress_callback,
+        phase="cover",
+        processed=0,
+        requested=len(targets),
+        last_item=None,
+    )
     for target_id in targets:
+        if _stop_was_requested(stop_requested):
+            stopped = True
+            break
+        _report_progress(
+            progress_callback,
+            phase="cover",
+            processed=len(items),
+            requested=len(targets),
+            last_item={"id": target_id, "status": "running"},
+        )
         try:
             result = run_cover_one(target_id, overwrite=overwrite)
         except Exception as exc:
@@ -424,13 +474,22 @@ def run_cover_batch(
                 "error": str(exc) or exc.__class__.__name__,
             }
         items.append(result)
+        _report_progress(
+            progress_callback,
+            phase="cover",
+            processed=len(items),
+            requested=len(targets),
+            last_item=result,
+        )
 
+    stopped = stopped or _stop_was_requested(stop_requested)
     return {
         "scope": {"block": scope_block, "module": scope_module},
         "branch": "cover",
         "requested": len(targets),
         "processed": len(items),
         "items": items,
+        "stopped": stopped,
     }
 
 
@@ -464,6 +523,10 @@ def run_batch(
     ocr_resize_to_1800: bool = False,
     catalog_provider: str | None = None,
     catalog_model: str | None = None,
+    stop_requested: Callable[[], bool] | None = None,
+    progress_callback: (
+        Callable[[str, int, int, dict[str, Any] | None], None] | None
+    ) = None,
 ) -> dict[str, Any]:
     stage = _normalize_stage(start_stage, default="ocr")
     stop = _normalize_stage(stop_after, default=stage) if stop_after else None
@@ -471,13 +534,18 @@ def run_batch(
     if stage == "cover":
         if stop not in {None, "cover"}:
             raise ValueError("The cover branch can only stop after 'cover'")
-        return run_cover_batch(
-            book_id=book_id,
-            block=block,
-            module=module,
-            limit=limit,
-            overwrite=overwrite,
-        )
+        cover_kwargs: dict[str, Any] = {
+            "book_id": book_id,
+            "block": block,
+            "module": module,
+            "limit": limit,
+            "overwrite": overwrite,
+        }
+        if stop_requested is not None:
+            cover_kwargs["stop_requested"] = stop_requested
+        if progress_callback is not None:
+            cover_kwargs["progress_callback"] = progress_callback
+        return run_cover_batch(**cover_kwargs)
 
     scope_block, scope_module = books.resolve_scope(block, module, require=True)
 
@@ -512,7 +580,25 @@ def run_batch(
         )
 
     items: list[dict[str, Any]] = []
+    stopped = False
+    _report_progress(
+        progress_callback,
+        phase="workflow",
+        processed=0,
+        requested=len(targets),
+        last_item=None,
+    )
     for target_id in targets:
+        if _stop_was_requested(stop_requested):
+            stopped = True
+            break
+        _report_progress(
+            progress_callback,
+            phase="workflow",
+            processed=len(items),
+            requested=len(targets),
+            last_item={"id": target_id, "status": "running"},
+        )
         try:
             result = run_one(
                 target_id,
@@ -527,6 +613,7 @@ def run_batch(
                 ocr_resize_to_1800=ocr_resize_to_1800,
                 catalog_provider=catalog_provider,
                 catalog_model=catalog_model,
+                stop_requested=stop_requested,
             )
         except Exception as exc:
             error = str(exc) or exc.__class__.__name__
@@ -546,18 +633,36 @@ def run_batch(
                 "error": error,
             }
         items.append(result)
-
-    cover_sweep = None
-    if download_cover_after_metadata and _stage_range_includes_metadata(
-        start_stage=stage,
-        stop_after=stop,
-    ):
-        cover_sweep = run_cover_batch(
-            block=scope_block,
-            module=scope_module,
-            limit=None,
-            overwrite=False,
+        _report_progress(
+            progress_callback,
+            phase="workflow",
+            processed=len(items),
+            requested=len(targets),
+            last_item=result,
         )
+
+    stopped = stopped or _stop_was_requested(stop_requested)
+    cover_sweep = None
+    if (
+        not stopped
+        and download_cover_after_metadata
+        and _stage_range_includes_metadata(
+            start_stage=stage,
+            stop_after=stop,
+        )
+    ):
+        cover_kwargs = {
+            "block": scope_block,
+            "module": scope_module,
+            "limit": None,
+            "overwrite": False,
+        }
+        if stop_requested is not None:
+            cover_kwargs["stop_requested"] = stop_requested
+        if progress_callback is not None:
+            cover_kwargs["progress_callback"] = progress_callback
+        cover_sweep = run_cover_batch(**cover_kwargs)
+        stopped = bool(cover_sweep.get("stopped"))
 
     return {
         "scope": {"block": scope_block, "module": scope_module},
@@ -565,6 +670,7 @@ def run_batch(
         "processed": len(items),
         "items": items,
         "cover_sweep": cover_sweep,
+        "stopped": stopped,
     }
 
 
@@ -743,6 +849,7 @@ def review_action(
     book_id: str,
     *,
     action: str,
+    stop_after: str | None = None,
     download_cover_after_metadata: bool = True,
     max_attempts: int = WORKFLOW_MAX_ATTEMPTS,
     ocr_provider: str | None = None,
@@ -769,7 +876,7 @@ def review_action(
     return run_one(
         book_id,
         start_stage=stage,
-        stop_after=None,
+        stop_after=stop_after,
         action=normalized,
         overwrite=True,
         download_cover_after_metadata=download_cover_after_metadata,

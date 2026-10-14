@@ -165,6 +165,89 @@ Aquí están los datos extraídos de diversas fuentes sobre un libro:
 """.strip()
 
 
+_NULLABLE_STRING = {"type": ["string", "null"]}
+_NULLABLE_INTEGER = {"type": ["integer", "null"]}
+_NULLABLE_STRING_LIST = {
+    "type": ["array", "null"],
+    "items": {"type": "string"},
+}
+_CATALOG_RESPONSE_PROPERTIES: dict[str, Any] = {
+    "isbn": _NULLABLE_STRING,
+    "titulo": _NULLABLE_STRING,
+    "titulo_corto": _NULLABLE_STRING,
+    "subtitulo": _NULLABLE_STRING,
+    "titulo_completo": _NULLABLE_STRING,
+    "autor": _NULLABLE_STRING_LIST,
+    "pais_autor": _NULLABLE_STRING_LIST,
+    "editorial": _NULLABLE_STRING,
+    "pais_publicacion": _NULLABLE_STRING,
+    "anio": _NULLABLE_INTEGER,
+    "idioma": _NULLABLE_STRING_LIST,
+    "edicion": {
+        "type": ["array", "null"],
+        "items": {
+            "type": "string",
+            "enum": [
+                "1\u00aa edici\u00f3n",
+                "2\u00aa edici\u00f3n",
+                "3\u00aa edici\u00f3n",
+                "4\u00aa edici\u00f3n",
+                "5\u00aa edici\u00f3n o posteriores",
+                "Edici\u00f3n especial",
+                "Edici\u00f3n limitada",
+                "Edici\u00f3n ilustrada",
+                "Edici\u00f3n internacional",
+                "Edici\u00f3n para el profesor",
+            ],
+        },
+    },
+    "numero_impresion": {
+        "type": ["string", "null"],
+        "enum": [
+            "1\u00aa impresi\u00f3n",
+            "2\u00aa impresi\u00f3n",
+            "3\u00aa impresi\u00f3n",
+            "4\u00aa impresi\u00f3n",
+            "5\u00aa impresi\u00f3n o posteriores",
+            None,
+        ],
+    },
+    "coleccion": _NULLABLE_STRING,
+    "numero_coleccion": _NULLABLE_INTEGER,
+    "obra_completa": _NULLABLE_STRING,
+    "editor": _NULLABLE_STRING_LIST,
+    "traductor": _NULLABLE_STRING_LIST,
+    "ilustrador": _NULLABLE_STRING_LIST,
+    "introduccion_de": _NULLABLE_STRING_LIST,
+    "epilogo_de": _NULLABLE_STRING_LIST,
+    "fotografia_de": _NULLABLE_STRING_LIST,
+    "categoria": _NULLABLE_STRING,
+    "genero": _NULLABLE_STRING,
+    "ilustraciones": {
+        "type": ["string", "null"],
+        "enum": [
+            "Contiene ilustraciones",
+            "Ilustraciones en blanco y negro",
+            "Profusamente ilustrado",
+            "Profusamente ilustrado, en blanco y negro",
+            None,
+        ],
+    },
+    "encuadernacion": {
+        "type": ["string", "null"],
+        "enum": ["Tapa dura", "Tapa blanda", "Sin encuadernaci\u00f3n", None],
+    },
+    "paginas": _NULLABLE_INTEGER,
+    "palabras_clave": _NULLABLE_STRING_LIST,
+}
+CATALOG_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": _CATALOG_RESPONSE_PROPERTIES,
+    "required": list(_CATALOG_RESPONSE_PROPERTIES),
+    "additionalProperties": False,
+}
+
+
 GOOGLE_PROMPT_KEYS = (
     "title",
     "subtitle",
@@ -398,14 +481,27 @@ def _catalog_model_for_provider(provider: str, model: str | None) -> str:
     return CATALOG_OLLAMA_MODEL
 
 
-def _call_catalog_llm(*, provider: str, model: str, prompt: str) -> str:
+def _call_catalog_llm(
+    *,
+    provider: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> str:
     if provider == "openai":
         if not OPENAI_API_KEY:
             raise ClientError(
                 "OPENAI_API_KEY is not configured for catalog provider openai"
             )
-        return openai_text_chat(api_key=OPENAI_API_KEY, model=model, prompt=prompt)
+        return openai_text_chat(
+            api_key=OPENAI_API_KEY,
+            model=model,
+            instructions=system_prompt,
+            prompt=user_prompt,
+            response_schema=CATALOG_RESPONSE_SCHEMA,
+        )
     if provider == "ollama":
+        prompt = f"SYSTEM:\n{system_prompt}\n\nUSER:\n{user_prompt}"
         return ollama_chat_text(model=model, prompt=prompt)
     raise ClientError(f"Unsupported catalog provider: {provider}")
 
@@ -417,20 +513,21 @@ def build_catalog_payload(
     credits_text = str(book.get("credits_text") or "").strip()
     google_clean, open_library_clean, isbndb_clean = _clean_sources_for_prompt(metadata)
 
-    prompt = (
-        f"SYSTEM:\n{CATALOG_SYSTEM_PROMPT}\n\n"
-        "USER:\n"
-        + CATALOG_HUMAN_PROMPT_TEMPLATE.format(
-            credits=credits_text or "",
-            google=json.dumps(google_clean, ensure_ascii=False, indent=2),
-            open_library=json.dumps(open_library_clean, ensure_ascii=False, indent=2),
-            isbndb=json.dumps(isbndb_clean, ensure_ascii=False, indent=2),
-        )
+    user_prompt = CATALOG_HUMAN_PROMPT_TEMPLATE.format(
+        credits=credits_text or "",
+        google=json.dumps(google_clean, ensure_ascii=False, indent=2),
+        open_library=json.dumps(open_library_clean, ensure_ascii=False, indent=2),
+        isbndb=json.dumps(isbndb_clean, ensure_ascii=False, indent=2),
     )
 
     chosen_provider = _normalize_catalog_provider(provider)
     chosen_model = _catalog_model_for_provider(chosen_provider, model)
-    raw = _call_catalog_llm(provider=chosen_provider, model=chosen_model, prompt=prompt)
+    raw = _call_catalog_llm(
+        provider=chosen_provider,
+        model=chosen_model,
+        system_prompt=CATALOG_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+    )
 
     parsed = _extract_json_object(raw)
     if not parsed:
@@ -461,6 +558,17 @@ def run_one(
 
     existing_status = str(book.get("catalog_status") or "").strip().lower()
     if existing_status in {"built", "manual"} and not overwrite:
+        try:
+            books.sync_core_book_from_catalog(book_id)
+        except Exception as exc:
+            return {
+                "id": book_id,
+                "status": "error",
+                "error": (
+                    "El catálogo ya existía, pero no se pudo crear su ficha: "
+                    f"{str(exc) or exc.__class__.__name__}"
+                ),
+            }
         return {"id": book_id, "status": "skipped", "reason": "catalog already present"}
 
     try:

@@ -40,7 +40,7 @@ def download(url: str, destination: Path, *, timeout: float) -> Path:
     temporary.unlink(missing_ok=True)
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "media-catalog-books asset preparation"},
+        headers={"User-Agent": "MC-Books asset preparation"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -93,9 +93,7 @@ def prepare_app_icon(*, force: bool, timeout: float) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Prepara los recursos locales no versionados de media-catalog-books"
-        )
+        description=("Prepara los recursos locales no versionados de MC Books")
     )
     parser.add_argument(
         "--force",

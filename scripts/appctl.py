@@ -1342,39 +1342,88 @@ def _wait_until_stopped(pid: int, tokens: Sequence[str], timeout: float = 5.0) -
         time.sleep(0.1)
 
 
+def _force_terminate_pid(
+    pid: int, tokens: Sequence[str], *, process_group: bool
+) -> bool:
+    if not _pid_matches(pid, tokens):
+        return False
+
+    if os.name == "nt":
+        _run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+        )
+        return True
+
+    try:
+        if process_group:
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_managed_pid(
+    pid: int,
+    tokens: Sequence[str],
+    *,
+    process_group: bool,
+    graceful_timeout: float,
+) -> bool:
+    if not _terminate_pid(pid, tokens, process_group=process_group):
+        return False
+
+    _wait_until_stopped(pid, tokens, timeout=graceful_timeout)
+    if _pid_matches(pid, tokens):
+        _force_terminate_pid(pid, tokens, process_group=process_group)
+        _wait_until_stopped(pid, tokens, timeout=3.0)
+
+    if _pid_matches(pid, tokens):
+        raise AppCtlError(f"No se pudo detener el proceso anterior con PID {pid}.")
+    return True
+
+
 def _stop_recorded_application() -> bool:
     state = _read_runtime_state()
     if not state:
         _remove_runtime_state()
         return False
 
+    stopped = False
     controller_pid = int(state.get("controller_pid") or 0)
     controller_mode = str(state.get("mode") or "launch")
     controller_tokens = ("appctl.py", controller_mode)
-    if controller_pid and _terminate_pid(
-        controller_pid, controller_tokens, process_group=False
-    ):
-        _wait_until_stopped(controller_pid, controller_tokens, timeout=12.0)
-        if not _pid_matches(controller_pid, controller_tokens):
-            _remove_runtime_state()
-            return True
+    if controller_pid:
+        stopped = (
+            _stop_managed_pid(
+                controller_pid,
+                controller_tokens,
+                process_group=False,
+                graceful_timeout=12.0,
+            )
+            or stopped
+        )
 
     child_entries = (
         ("frontend_pid", ("streamlit", str(FRONTEND_APP)), True),
         ("backend_pid", ("uvicorn", BACKEND_APP), True),
     )
-    stopped = False
     for key, tokens, process_group in child_entries:
         pid = int(state.get(key) or 0)
-        if pid and _terminate_pid(pid, tokens, process_group=process_group):
-            stopped = True
-            _wait_until_stopped(pid, tokens)
-
-    if controller_pid and _terminate_pid(
-        controller_pid, controller_tokens, process_group=False
-    ):
-        stopped = True
-        _wait_until_stopped(controller_pid, controller_tokens)
+        if not pid:
+            continue
+        stopped = (
+            _stop_managed_pid(
+                pid,
+                tokens,
+                process_group=process_group,
+                graceful_timeout=5.0,
+            )
+            or stopped
+        )
 
     _remove_runtime_state()
     return stopped
@@ -1947,9 +1996,7 @@ def command_update_and_launch(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Control multiplataforma de Media Catalog Books."
-    )
+    parser = argparse.ArgumentParser(description="Control multiplataforma de MC Books.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     commands = {
         "setup": (command_setup, "Prepara recursos, entorno y dependencias."),

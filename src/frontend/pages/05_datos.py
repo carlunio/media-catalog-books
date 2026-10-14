@@ -12,6 +12,8 @@ try:
         api_get_bytes,
         api_post,
         configure_page,
+        render_page_header,
+        show_backend_status,
         select_module_scope,
     )
 except ModuleNotFoundError:  # pragma: no cover
@@ -21,11 +23,21 @@ except ModuleNotFoundError:  # pragma: no cover
         api_get_bytes,
         api_post,
         configure_page,
+        render_page_header,
+        show_backend_status,
         select_module_scope,
     )
 
-configure_page("Datos | Media Catalog Books")
-st.title("Fase 5 - Datos")
+configure_page("Datos | MC Books")
+render_page_header(
+    phase="5",
+    title="Datos",
+    description=(
+        "Intercambia bases mediante instantáneas y gestiona la revisión "
+        "externa de fichas en Excel."
+    ),
+)
+show_backend_status()
 
 
 def _snapshot_origin(snapshot: dict[str, Any]) -> str:
@@ -102,15 +114,16 @@ with st.container(border=True):
         key="external_review_export",
     ):
         try:
-            workbook_bytes = api_get_bytes(
-                "/core-books/review-workbook",
-                params={
-                    "block": review_block,
-                    "module": review_module,
-                    "form_status": selected_status,
-                },
-                timeout=LONG_TIMEOUT_SECONDS,
-            )
+            with st.spinner("Preparando el Excel de revisión…"):
+                workbook_bytes = api_get_bytes(
+                    "/core-books/review-workbook",
+                    params={
+                        "block": review_block,
+                        "module": review_module,
+                        "form_status": selected_status,
+                    },
+                    timeout=LONG_TIMEOUT_SECONDS,
+                )
         except Exception as exc:
             st.error(f"No se pudo preparar el Excel: {exc}")
         else:
@@ -157,15 +170,16 @@ with st.container(border=True):
             key="external_review_preview_button",
         ):
             try:
-                preview = api_post(
-                    "/core-books/review-workbook/preview",
-                    json={
-                        "content_base64": base64.b64encode(uploaded_bytes).decode(
-                            "ascii"
-                        )
-                    },
-                    timeout=LONG_TIMEOUT_SECONDS,
-                )
+                with st.spinner("Analizando y validando el Excel…"):
+                    preview = api_post(
+                        "/core-books/review-workbook/preview",
+                        json={
+                            "content_base64": base64.b64encode(uploaded_bytes).decode(
+                                "ascii"
+                            )
+                        },
+                        timeout=LONG_TIMEOUT_SECONDS,
+                    )
             except Exception as exc:
                 st.session_state.pop("external_review_preview", None)
                 st.session_state.pop("external_review_import_bytes", None)
@@ -251,18 +265,23 @@ with st.container(border=True):
                 st.error("Vuelve a analizar el archivo antes de importarlo.")
             else:
                 try:
-                    result = api_post(
-                        "/core-books/review-workbook/apply",
-                        json={
-                            "content_base64": base64.b64encode(
-                                bytes(import_bytes)
-                            ).decode("ascii"),
-                            "workbook_sha256": preview.get("workbook_sha256"),
-                            "confirm": True,
-                            "consolidate_after_import": bool(consolidate_after_import),
-                        },
-                        timeout=LONG_TIMEOUT_SECONDS,
-                    )
+                    with st.spinner(
+                        "Aplicando los cambios y regenerando descripciones…"
+                    ):
+                        result = api_post(
+                            "/core-books/review-workbook/apply",
+                            json={
+                                "content_base64": base64.b64encode(
+                                    bytes(import_bytes)
+                                ).decode("ascii"),
+                                "workbook_sha256": preview.get("workbook_sha256"),
+                                "confirm": True,
+                                "consolidate_after_import": bool(
+                                    consolidate_after_import
+                                ),
+                            },
+                            timeout=LONG_TIMEOUT_SECONDS,
+                        )
                 except Exception as exc:
                     st.error(f"No se pudieron aplicar los cambios: {exc}")
                 else:
@@ -329,11 +348,12 @@ action_left, action_right = st.columns([1, 1], gap="small")
 with action_left:
     if st.button("Publicar instantánea", type="primary", width="stretch"):
         try:
-            result = api_post(
-                "/snapshots/publish",
-                json={"notes": "Instantánea manual desde Streamlit"},
-                timeout=LONG_TIMEOUT_SECONDS,
-            )
+            with st.spinner("Publicando una instantánea de la base de datos…"):
+                result = api_post(
+                    "/snapshots/publish",
+                    json={"notes": "Instantánea manual desde Streamlit"},
+                    timeout=LONG_TIMEOUT_SECONDS,
+                )
         except Exception as exc:
             st.error(f"No se pudo publicar la instantánea: {exc}")
         else:
@@ -344,7 +364,8 @@ with action_left:
 with action_right:
     if st.button("Limpiar instantáneas antiguas", width="stretch"):
         try:
-            result = api_post("/snapshots/cleanup", timeout=LONG_TIMEOUT_SECONDS)
+            with st.spinner("Limpiando las instantáneas antiguas…"):
+                result = api_post("/snapshots/cleanup", timeout=LONG_TIMEOUT_SECONDS)
         except Exception as exc:
             st.error(f"No se pudieron limpiar las instantáneas: {exc}")
         else:
@@ -395,11 +416,12 @@ with st.expander("Importar instantánea", expanded=bool(external_snapshot)):
             width="stretch",
         ):
             try:
-                result = api_post(
-                    "/snapshots/import",
-                    json={"snapshot_id": selected_snapshot_id, "confirm": True},
-                    timeout=LONG_TIMEOUT_SECONDS,
-                )
+                with st.spinner("Validando e importando la instantánea…"):
+                    result = api_post(
+                        "/snapshots/import",
+                        json={"snapshot_id": selected_snapshot_id, "confirm": True},
+                        timeout=LONG_TIMEOUT_SECONDS,
+                    )
             except Exception as exc:
                 st.error(f"No se pudo importar la instantánea: {exc}")
             else:

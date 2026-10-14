@@ -3,7 +3,6 @@ import streamlit as st
 
 try:
     from src.frontend.utils import (
-        API_URL,
         CATALOG_OLLAMA_MODEL_DEFAULT,
         CATALOG_OLLAMA_MODEL_SUGGESTIONS,
         CATALOG_OPENAI_MODEL_DEFAULT,
@@ -17,8 +16,11 @@ try:
         api_get,
         api_post,
         configure_page,
+        render_page_header,
         load_ollama_models,
         render_ollama_model_selector,
+        render_openai_catalog_model_selector,
+        render_openai_ocr_model_selector,
         seed_widget_once,
         scope_params,
         select_module_scope,
@@ -26,7 +28,6 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover
     from frontend.utils import (
-        API_URL,
         CATALOG_OLLAMA_MODEL_DEFAULT,
         CATALOG_OLLAMA_MODEL_SUGGESTIONS,
         CATALOG_OPENAI_MODEL_DEFAULT,
@@ -40,18 +41,27 @@ except ModuleNotFoundError:  # pragma: no cover
         api_get,
         api_post,
         configure_page,
+        render_page_header,
         load_ollama_models,
         render_ollama_model_selector,
+        render_openai_catalog_model_selector,
+        render_openai_ocr_model_selector,
         seed_widget_once,
         scope_params,
         select_module_scope,
         show_backend_status,
     )
 
-configure_page("Orquestación | Media Catalog Books")
+configure_page("Orquestación | MC Books")
 
-st.title("Fase 1 · Orquestación LangGraph")
-st.caption(f"Backend objetivo: {API_URL}")
+render_page_header(
+    phase="1",
+    title="Orquestación",
+    description=(
+        "Consulta el estado del módulo y ejecuta OCR, metadatos, catalogación "
+        "o la descarga de portadas."
+    ),
+)
 show_backend_status()
 
 scope_block, scope_module = select_module_scope(
@@ -60,29 +70,389 @@ scope_block, scope_module = select_module_scope(
 if not scope_module:
     st.stop()
 
-with st.expander("Definición del grafo", expanded=False):
-    try:
-        graph = api_get("/workflow/graph", timeout=12.0)
-        st.write("LangGraph disponible:", graph.get("langgraph_available"))
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.write("Nodos")
-            st.dataframe(
-                pd.DataFrame(graph.get("nodes", [])), width="stretch", hide_index=True
-            )
-        with col_b:
-            st.write("Aristas")
-            st.dataframe(
-                pd.DataFrame(graph.get("edges", [])), width="stretch", hide_index=True
-            )
-    except Exception as exc:
-        st.error(f"No se pudo cargar /workflow/graph: {exc}")
-
-st.subheader("Ejecución del flujo de trabajo")
-
+ACTIVE_JOB_STATUSES = {"queued", "running", "stopping"}
+JOB_STATUS_LABELS = {
+    "queued": "En cola",
+    "running": "En ejecución",
+    "stopping": "Deteniéndose",
+    "stopped": "Detenida",
+    "completed": "Completada",
+    "failed": "Fallida",
+}
+JOB_PHASE_LABELS = {"workflow": "Flujo principal", "cover": "Portadas"}
 STAGE_INDEX = {stage_name: idx for idx, stage_name in enumerate(WORKFLOW_STAGES)}
+STAGE_LABELS = {"ocr": "OCR", "metadata": "Metadatos", "catalog": "Catalogación"}
+LAST_JOB_SESSION_KEY = "orq_last_workflow_job_id"
 
-col1, col2, col3, col4 = st.columns([1.2, 1, 1, 1])
+
+def _job_stage_summary(job: dict) -> str:
+    start_stage = str(job.get("start_stage") or "ocr")
+    if start_stage == "cover":
+        return "Portadas"
+
+    start_index = STAGE_INDEX.get(start_stage, 0)
+    stop_stage = str(job.get("stop_after") or WORKFLOW_STAGES[-1])
+    stop_index = STAGE_INDEX.get(stop_stage, len(WORKFLOW_STAGES) - 1)
+    stop_index = max(start_index, stop_index)
+    labels = [
+        STAGE_LABELS[stage]
+        for stage in WORKFLOW_STAGES
+        if start_index <= STAGE_INDEX[stage] <= stop_index
+    ]
+    summary = " → ".join(labels)
+    metadata_index = STAGE_INDEX.get("metadata", -1)
+    if (
+        bool(job.get("download_cover_after_metadata"))
+        and start_index <= metadata_index <= stop_index
+    ):
+        summary += " · barrido de portadas"
+    return summary
+
+
+def _job_progress_entries(job: dict) -> list[tuple[str, dict]]:
+    progress = job.get("progress")
+    if isinstance(progress, dict) and progress:
+        return [
+            (phase, progress[phase])
+            for phase in ("workflow", "cover")
+            if isinstance(progress.get(phase), dict)
+        ]
+
+    phase = str(job.get("phase") or "workflow")
+    return [
+        (
+            phase,
+            {
+                "processed": job.get("processed"),
+                "requested": job.get("requested"),
+                "last_item": job.get("last_item"),
+            },
+        )
+    ]
+
+
+def _render_job_progress_panel(job: dict) -> None:
+    status = str(job.get("status") or "")
+    status_label = JOB_STATUS_LABELS.get(status, status or "Preparando")
+    with st.container(border=True):
+        title_col, status_col = st.columns([3, 1])
+        with title_col:
+            st.markdown("**Progreso de la ejecución**")
+            st.caption(_job_stage_summary(job))
+        with status_col:
+            st.markdown(f"**{status_label}**")
+
+        entries = _job_progress_entries(job)
+        for phase, phase_progress in entries:
+            phase_label = JOB_PHASE_LABELS.get(phase, phase.capitalize())
+            processed = max(0, int(phase_progress.get("processed") or 0))
+            requested = max(0, int(phase_progress.get("requested") or 0))
+            unit = "portadas" if phase == "cover" else "libros"
+            if requested > 0:
+                fraction = min(1.0, processed / requested)
+                progress_text = f"{processed}/{requested} {unit} procesados"
+            elif status == "queued" and not job.get("progress"):
+                fraction = 0.0
+                progress_text = "Preparando el lote…"
+            else:
+                fraction = 1.0
+                progress_text = f"0/0 {unit}: no había elementos elegibles"
+
+            st.markdown(f"**{phase_label}**")
+            st.progress(fraction, text=progress_text)
+
+            item = phase_progress.get("last_item")
+            if isinstance(item, dict) and item.get("id"):
+                item_status = str(item.get("status") or "")
+                prefix = "En curso" if item_status == "running" else "Último procesado"
+                suffix = (
+                    f" · {item_status}"
+                    if item_status and item_status != "running"
+                    else ""
+                )
+                item_id = str(item.get("id") or "")
+                st.caption(f"{prefix}: `{item_id}`{suffix}")
+
+        if status in ACTIVE_JOB_STATUSES:
+            st.caption(
+                "Pulsa Actualizar para consultar el último avance. Detener no inicia "
+                "otra etapa y devuelve el libro a la última etapa válida guardada."
+            )
+
+
+active_job: dict | None = None
+last_job: dict | None = None
+try:
+    current_job_payload = api_get(
+        "/workflow/jobs/current",
+        params=scope_params(scope_block, scope_module),
+        timeout=10.0,
+    )
+    candidate = current_job_payload.get("job")
+    if isinstance(candidate, dict):
+        active_job = candidate
+        st.session_state[LAST_JOB_SESSION_KEY] = str(candidate.get("job_id") or "")
+except Exception as exc:
+    st.warning(f"No se pudo consultar la ejecución activa: {exc}")
+
+last_job_id = str(st.session_state.get(LAST_JOB_SESSION_KEY) or "").strip()
+if last_job_id and (
+    active_job is None or str(active_job.get("job_id") or "") != last_job_id
+):
+    try:
+        last_job_payload = api_get(
+            f"/workflow/jobs/{last_job_id}",
+            timeout=10.0,
+        )
+        candidate = last_job_payload.get("job")
+        if isinstance(candidate, dict):
+            last_job = candidate
+    except Exception:
+        last_job = None
+elif active_job is not None:
+    last_job = active_job
+
+st.subheader("Estado del módulo")
+state_title_col, state_stop_col, state_refresh_col = st.columns([4, 1, 1])
+with state_title_col:
+    st.caption(
+        "Situación actual antes de lanzar nuevas órdenes. Los recuentos se "
+        "actualizan al recargar la página."
+    )
+with state_stop_col:
+    stop_status = str((active_job or {}).get("status") or "")
+    stop_disabled = active_job is None or stop_status == "stopping"
+    stop_label = "Deteniendo" if stop_status == "stopping" else "Detener"
+    if st.button(
+        stop_label,
+        icon=":material/stop_circle:",
+        key="orq_stop_workflow",
+        disabled=stop_disabled,
+        width="stretch",
+    ):
+        try:
+            stop_response = api_post(
+                f"/workflow/jobs/{active_job['job_id']}/stop",
+                timeout=15.0,
+            )
+            stopped_job = stop_response.get("job") or {}
+            if str(stopped_job.get("status") or "") == "stopping":
+                st.warning(
+                    "Parada solicitada. La operación activa terminará de forma segura; "
+                    "no se iniciará otra etapa y el libro volverá a su último "
+                    "estado válido."
+                )
+            else:
+                st.info("La ejecución ya había terminado.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo detener la ejecución: {exc}")
+with state_refresh_col:
+    st.button(
+        "Actualizar",
+        icon=":material/refresh:",
+        key="orq_refresh_snapshot",
+        width="stretch",
+    )
+
+if active_job is not None:
+    _render_job_progress_panel(active_job)
+
+snapshot: dict | None = None
+try:
+    snapshot = api_get(
+        "/workflow/snapshot",
+        params={
+            "limit": 5000,
+            "review_limit": 300,
+            **scope_params(scope_block, scope_module),
+        },
+        timeout=12.0,
+    )
+except Exception as exc:
+    st.warning(f"No se pudo cargar el estado del módulo: {exc}")
+
+if snapshot is not None:
+    stage_counts = snapshot.get("stage_counts", {})
+    workflow_status_counts = snapshot.get("workflow_status_counts", {})
+    form_status_counts = snapshot.get("form_status_counts", {})
+    running_nodes = snapshot.get("running_nodes", {})
+    review_queue = list(snapshot.get("review_queue") or [])
+
+    overview_a, overview_b, overview_c, overview_d = st.columns(4)
+    overview_a.metric("Libros del módulo", int(snapshot.get("total_considered") or 0))
+    overview_b.metric("En ejecución", int(stage_counts.get("running", 0)))
+    overview_c.metric("En revisión", int(stage_counts.get("review", 0)))
+    overview_d.metric("Completados", int(stage_counts.get("done", 0)))
+
+    stage_a, stage_b, stage_c, stage_d = st.columns(4)
+    stage_a.metric("Pendientes de OCR", int(stage_counts.get("ocr", 0)))
+    stage_b.metric("Pendientes de metadatos", int(stage_counts.get("metadata", 0)))
+    stage_c.metric("Pendientes de catálogo", int(stage_counts.get("catalog", 0)))
+    stage_d.metric("Pendientes de portada", int(stage_counts.get("cover", 0)))
+
+    unknown_total = int(stage_counts.get("unknown", 0))
+    if unknown_total:
+        st.warning(f"Hay {unknown_total} libros con una etapa no reconocida.")
+
+    running_total = int(stage_counts.get("running", 0))
+    with st.expander(
+        f"Elementos en ejecución · {running_total}",
+        expanded=running_total > 0,
+    ):
+        if running_total > 0:
+            try:
+                running_rows = api_get(
+                    "/books",
+                    params={
+                        "limit": 5000,
+                        **scope_params(scope_block, scope_module),
+                    },
+                    timeout=20.0,
+                )
+                running_items = [
+                    row
+                    for row in running_rows
+                    if str(row.get("workflow_status") or "").strip().lower()
+                    == "running"
+                ]
+                running_table = []
+                for row in running_items:
+                    node = str(row.get("workflow_current_node") or "").strip()
+                    stage = str(row.get("pipeline_stage") or "").strip()
+                    workflow_action = str(row.get("workflow_action") or "").strip()
+                    llm_value = ""
+                    if "llm=" in workflow_action:
+                        llm_value = workflow_action.split("llm=", maxsplit=1)[1].strip()
+                        if "|" in llm_value:
+                            llm_value = llm_value.split("|", maxsplit=1)[0].strip()
+                    if not llm_value and node == "ocr":
+                        provider = str(row.get("ocr_provider") or "").strip()
+                        model = str(row.get("ocr_model") or "").strip()
+                        llm_value = (
+                            f"{provider}/{model}"
+                            if provider and model
+                            else provider or model
+                        )
+                    running_table.append(
+                        {
+                            "Libro": str(row.get("id") or ""),
+                            "Nodo": node or "(sin nodo)",
+                            "Etapa": stage or "(sin etapa)",
+                            "Acción": workflow_action
+                            or (f"Ejecutando {node}" if node else "Ejecutando flujo"),
+                            "Modelo": llm_value or "-",
+                            "Intento": int(row.get("workflow_attempt") or 0),
+                            "Actualizado": row.get("updated_at"),
+                        }
+                    )
+                if running_table:
+                    st.dataframe(
+                        pd.DataFrame(running_table),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                else:
+                    st.info("No hay elementos en ejecución ahora mismo.")
+            except Exception as exc:
+                st.error(f"No se pudo cargar el detalle de la ejecución: {exc}")
+        else:
+            st.caption("No hay elementos en ejecución ahora mismo.")
+
+    with st.expander(
+        f"Cola de revisión · {len(review_queue)}",
+        expanded=bool(review_queue),
+    ):
+        if review_queue:
+            queue_df = pd.DataFrame(review_queue).rename(
+                columns={
+                    "id": "Libro",
+                    "pipeline_stage": "Etapa",
+                    "workflow_current_node": "Nodo",
+                    "workflow_review_reason": "Motivo",
+                    "workflow_attempt": "Intento",
+                    "updated_at": "Actualizado",
+                }
+            )
+            st.dataframe(queue_df, width="stretch", hide_index=True)
+            st.caption(
+                "La aprobación y la repetición de fases se gestionan en Revisión, "
+                "donde están disponibles todas las opciones del flujo."
+            )
+            st.page_link(
+                "pages/02_revision_manual.py",
+                label="Abrir Revisión",
+                icon=":material/fact_check:",
+            )
+        else:
+            st.caption("No hay libros pendientes de revisión.")
+
+    with st.expander("Detalle de estados", expanded=False):
+        st.markdown("**Estados del flujo**")
+        st.dataframe(
+            pd.DataFrame([workflow_status_counts]),
+            width="stretch",
+            hide_index=True,
+        )
+        st.markdown("**Estados del formulario**")
+        st.dataframe(
+            pd.DataFrame([form_status_counts]),
+            width="stretch",
+            hide_index=True,
+        )
+        st.markdown("**Nodos en ejecución**")
+        st.dataframe(pd.DataFrame([running_nodes]), width="stretch", hide_index=True)
+
+if (
+    last_job is not None
+    and str(last_job.get("status") or "") not in ACTIVE_JOB_STATUSES
+):
+    last_status = str(last_job.get("status") or "")
+    job_result = (
+        last_job.get("result") if isinstance(last_job.get("result"), dict) else {}
+    )
+    processed = int(job_result.get("processed") or last_job.get("processed") or 0)
+    requested = int(job_result.get("requested") or last_job.get("requested") or 0)
+    if last_status == "completed":
+        st.success(f"Última ejecución completada: {processed} de {requested}.")
+    elif last_status == "stopped":
+        st.warning(
+            f"Última ejecución detenida de forma segura: {processed} de "
+            f"{requested} elementos procesados."
+        )
+    elif last_status == "failed":
+        st.error(
+            "La última ejecución falló: "
+            f"{last_job.get('error') or 'error desconocido'}"
+        )
+
+    with st.expander("Resultado de la última ejecución", expanded=False):
+        result_items = list(job_result.get("items") or [])
+        if result_items:
+            st.dataframe(pd.DataFrame(result_items), width="stretch", hide_index=True)
+        else:
+            st.caption("La ejecución no produjo resultados individuales.")
+        cover_sweep = job_result.get("cover_sweep")
+        if isinstance(cover_sweep, dict):
+            st.caption(
+                "Barrido de portadas: "
+                f"{int(cover_sweep.get('processed') or 0)} de "
+                f"{int(cover_sweep.get('requested') or 0)}."
+            )
+            cover_items = list(cover_sweep.get("items") or [])
+            if cover_items:
+                st.dataframe(
+                    pd.DataFrame(cover_items),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+st.divider()
+
+st.subheader("Ejecutar una fase o un tramo")
+st.caption("Define el alcance; después ajusta los modelos y las opciones aplicables.")
+
+col1, col2, col3 = st.columns([1.4, 1, 1])
 with col1:
     selected_id = st.text_input(
         "ID del libro (opcional)", value="", placeholder="03B0001"
@@ -91,9 +461,15 @@ with col2:
     start_stage_key = "orq_start_stage"
     if start_stage_key not in st.session_state:
         st.session_state[start_stage_key] = WORKFLOW_STAGES[0]
-    start_stage = st.selectbox("Desde", WORKFLOW_STAGES, key=start_stage_key)
+    start_stage = st.selectbox(
+        "Desde",
+        WORKFLOW_STAGES,
+        key=start_stage_key,
+        format_func=lambda value: STAGE_LABELS.get(str(value), str(value)),
+    )
 with col3:
-    stop_options = ["(sin límite)"] + list(WORKFLOW_STAGES)
+    start_option_idx = STAGE_INDEX.get(start_stage, 0)
+    stop_options = ["(sin límite)", *WORKFLOW_STAGES[start_option_idx:]]
     stop_after_key = "orq_stop_after"
     prev_start_key = "orq_prev_start_stage"
     previous_start = str(st.session_state.get(prev_start_key) or "").strip()
@@ -104,21 +480,33 @@ with col3:
         st.session_state[stop_after_key] = start_stage
     if st.session_state.get(stop_after_key) not in stop_options:
         st.session_state[stop_after_key] = start_stage
-    stop_after = st.selectbox("Parar en", stop_options, key=stop_after_key)
+    stop_after = st.selectbox(
+        "Parar en",
+        stop_options,
+        key=stop_after_key,
+        format_func=lambda value: (
+            value
+            if value == "(sin límite)"
+            else STAGE_LABELS.get(str(value), str(value))
+        ),
+    )
     st.session_state[prev_start_key] = start_stage
-with col4:
-    st.caption("El límite del lote se calcula con los libros elegibles")
 
-overwrite = st.checkbox(
-    "Sobrescribir etapas ya completas",
-    value=False,
-    help=(
-        "Permite repetir la etapa elegida en libros que ya han avanzado más. "
-        "Los libros con el flujo completado, consolidados, en revisión o en ejecución siempre "
-        "quedan excluidos."
-    ),
-)
-max_attempts = st.number_input("Reintentos máximos", min_value=0, max_value=20, value=2)
+option_col_a, option_col_b = st.columns(2)
+with option_col_a:
+    overwrite = st.checkbox(
+        "Sobrescribir etapas ya completas",
+        value=False,
+        help=(
+            "Permite repetir la etapa elegida en libros que ya han avanzado más. "
+            "Los libros con el flujo completado, consolidados, en revisión o en "
+            "ejecución siempre quedan excluidos."
+        ),
+    )
+with option_col_b:
+    max_attempts = st.number_input(
+        "Reintentos máximos", min_value=0, max_value=20, value=2
+    )
 st.caption(
     "El lote no tiene un tiempo de espera global. Cada llamada externa tiene su propio "
     "límite y el contador se reinicia para el siguiente libro."
@@ -162,7 +550,8 @@ if eligible_limit is None:
 elif eligible_limit <= 0:
     overwrite_text = " con sobrescritura" if overwrite else ""
     st.info(
-        f"No hay elementos elegibles para '{start_stage}'{overwrite_text} "
+        f"No hay elementos elegibles para "
+        f"'{STAGE_LABELS.get(start_stage, start_stage)}'{overwrite_text} "
         "en el módulo seleccionado. Si el rango incluye metadatos y mantienes "
         "activada la descarga automática, aún puedes ejecutar el barrido de "
         "portadas pendientes."
@@ -172,7 +561,10 @@ else:
     eligibility_text = (
         "incluyendo etapas posteriores" if overwrite else "en la etapa exacta"
     )
-    st.caption(f"Elegibles para '{start_stage}' ({eligibility_text}): {eligible_limit}")
+    st.caption(
+        f"Elegibles para '{STAGE_LABELS.get(start_stage, start_stage)}' "
+        f"({eligibility_text}): {eligible_limit}"
+    )
     limit = st.number_input(
         "Lote",
         min_value=1,
@@ -210,11 +602,10 @@ with col_model:
             disabled=not ocr_in_flow,
         )
     else:
-        seed_widget_once("orq_ocr_model_openai", OCR_OPENAI_MODEL_DEFAULT)
-        ocr_model = st.text_input(
-            "Modelo OCR",
-            placeholder=OCR_OPENAI_MODEL_DEFAULT,
+        ocr_model = render_openai_ocr_model_selector(
+            label="Modelo OCR",
             key="orq_ocr_model_openai",
+            default_model=OCR_OPENAI_MODEL_DEFAULT,
             disabled=not ocr_in_flow,
         )
 
@@ -271,11 +662,10 @@ with cat_col_b:
             disabled=not catalog_in_flow,
         )
     else:
-        seed_widget_once("orq_catalog_model_openai", CATALOG_OPENAI_MODEL_DEFAULT)
-        catalog_model = st.text_input(
-            "Modelo del catálogo",
-            placeholder=CATALOG_OPENAI_MODEL_DEFAULT,
+        catalog_model = render_openai_catalog_model_selector(
+            label="Modelo del catálogo",
             key="orq_catalog_model_openai",
+            default_model=CATALOG_OPENAI_MODEL_DEFAULT,
             disabled=not catalog_in_flow,
         )
 if not catalog_in_flow:
@@ -288,7 +678,31 @@ if catalog_in_flow:
         f"Catálogo efectivo (si no tocas nada): `{catalog_provider}` / `{catalog_model}`"
     )
 
-if st.button("Ejecutar flujo", type="primary"):
+selected_stage_names = [
+    STAGE_LABELS[stage]
+    for stage in WORKFLOW_STAGES
+    if start_idx <= STAGE_INDEX[stage] <= stop_idx
+]
+target_text = (
+    f"el libro {selected_id.strip()}"
+    if selected_id.strip()
+    else f"hasta {int(limit)} libros elegibles"
+)
+with st.container(border=True):
+    st.markdown("**Resumen de la orden**")
+    st.caption(
+        f"{target_text} · {' → '.join(selected_stage_names)} · "
+        f"{'con' if overwrite else 'sin'} sobrescritura · "
+        f"{int(max_attempts)} reintentos máximos"
+    )
+
+if st.button(
+    "Ejecutar flujo",
+    type="primary",
+    icon=":material/play_arrow:",
+    disabled=active_job is not None,
+    width="stretch",
+):
     cover_sweep_requested = metadata_in_flow and bool(download_cover_after_metadata)
     if int(limit) <= 0 and not cover_sweep_requested:
         st.warning("No hay elementos elegibles para ejecutar con esa configuración.")
@@ -313,257 +727,122 @@ if st.button("Ejecutar flujo", type="primary"):
         "catalog_model": (catalog_model.strip() or None) if catalog_in_flow else None,
     }
     try:
-        result = api_post("/workflow/run", json=payload, timeout=None)
+        with st.spinner("Iniciando la ejecución…"):
+            response = api_post("/workflow/jobs", json=payload, timeout=15.0)
+        started_job = response.get("job") or {}
+        started_job_id = str(started_job.get("job_id") or "").strip()
+        if not started_job_id:
+            raise RuntimeError("El backend no devolvió el identificador de ejecución.")
+        st.session_state[LAST_JOB_SESSION_KEY] = started_job_id
         st.success(
-            f"Procesados {result.get('processed', 0)} de {result.get('requested', 0)}"
+            "Ejecución iniciada. Puedes actualizar el estado o detener el lote "
+            "desde la parte superior."
         )
-        items = result.get("items", [])
-        if items:
-            st.dataframe(pd.DataFrame(items), width="stretch", hide_index=True)
-        cover_sweep = result.get("cover_sweep")
-        if isinstance(cover_sweep, dict):
-            st.info(
-                "Barrido de portadas del módulo: "
-                f"{cover_sweep.get('processed', 0)} pendientes procesadas."
-            )
-            cover_items = cover_sweep.get("items", [])
-            if cover_items:
-                st.dataframe(
-                    pd.DataFrame(cover_items),
-                    width="stretch",
-                    hide_index=True,
-                )
+        st.rerun()
     except Exception as exc:
-        st.error(f"Error al ejecutar el flujo: {exc}")
+        st.error(f"No se pudo iniciar el flujo: {exc}")
 
 st.divider()
-st.subheader("Descarga de portadas")
-st.caption(
-    "Rama opcional basada en las imágenes de las API. Se puede ejecutar en "
-    "cualquier momento, también después de consolidar la ficha, y no modifica "
-    "su estado ni bloquea los pasos del flujo de trabajo."
-)
-
-try:
-    cover_eligible_payload = api_get(
-        "/workflow/eligible",
-        params={
-            "start_stage": "cover",
-            "overwrite": "false",
-            **scope_params(scope_block, scope_module),
-        },
-        timeout=10.0,
-    )
-    cover_eligible = int(cover_eligible_payload.get("eligible", 0))
-    st.caption(f"Portadas pendientes en el módulo: {cover_eligible}")
-except Exception as exc:
-    st.warning(f"No se pudo calcular las portadas pendientes: {exc}")
-
-with st.form("orq_cover_download_form", border=True):
-    cover_id_col, cover_limit_col = st.columns([2, 1])
-    with cover_id_col:
-        cover_book_id = st.text_input(
-            "ID del libro (opcional)",
-            placeholder="03B0001",
-            key="orq_cover_book_id",
-        )
-    with cover_limit_col:
-        cover_limit = st.number_input(
-            "Lote de portadas",
-            min_value=1,
-            max_value=5000,
-            value=20,
-            key="orq_cover_limit",
-        )
-    cover_overwrite = st.checkbox(
-        "Volver a descargar portadas ya procesadas",
-        value=False,
-        key="orq_cover_overwrite",
-    )
-    download_covers = st.form_submit_button(
-        "Descargar portadas",
-        icon=":material/download:",
-        type="primary",
+with st.expander("Descarga manual de portadas", expanded=False):
+    st.markdown("#### Descarga de portadas")
+    st.caption(
+        "Rama opcional basada en las imágenes de las API. Se puede ejecutar en "
+        "cualquier momento, también después de consolidar la ficha, y no modifica "
+        "su estado ni bloquea los pasos del flujo de trabajo."
     )
 
-if download_covers:
     try:
-        cover_result = api_post(
-            "/cover/download",
-            json={
-                "book_id": cover_book_id.strip() or None,
-                "block": scope_block,
-                "module": scope_module,
-                "limit": int(cover_limit),
-                "overwrite": bool(cover_overwrite),
+        cover_eligible_payload = api_get(
+            "/workflow/eligible",
+            params={
+                "start_stage": "cover",
+                "overwrite": "false",
+                **scope_params(scope_block, scope_module),
             },
-            timeout=None,
+            timeout=10.0,
         )
-        st.success(
-            "Rama de portadas completada: "
-            f"{cover_result.get('processed', 0)} de "
-            f"{cover_result.get('requested', 0)} procesadas."
-        )
-        cover_items = cover_result.get("items", [])
-        if cover_items:
-            st.dataframe(pd.DataFrame(cover_items), width="stretch", hide_index=True)
+        cover_eligible = int(cover_eligible_payload.get("eligible", 0))
+        st.caption(f"Portadas pendientes en el módulo: {cover_eligible}")
     except Exception as exc:
-        st.error(f"Error descargando portadas: {exc}")
+        st.warning(f"No se pudo calcular las portadas pendientes: {exc}")
 
-st.subheader("Estado operativo")
-
-if st.button("Actualizar estado"):
-    st.cache_data.clear()
-
-try:
-    params = {
-        "limit": 5000,
-        "review_limit": 300,
-        **scope_params(scope_block, scope_module),
-    }
-    snapshot = api_get("/workflow/snapshot", params=params, timeout=12.0)
-except Exception as exc:
-    st.error(f"No se pudo cargar el estado: {exc}")
-    st.stop()
-
-stage_counts = snapshot.get("stage_counts", {})
-workflow_status_counts = snapshot.get("workflow_status_counts", {})
-form_status_counts = snapshot.get("form_status_counts", {})
-running_nodes = snapshot.get("running_nodes", {})
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("OCR", int(stage_counts.get("ocr", 0)))
-m2.metric("Metadatos", int(stage_counts.get("metadata", 0)))
-m3.metric("Catálogo", int(stage_counts.get("catalog", 0)))
-m4.metric("Portadas", int(stage_counts.get("cover", 0)))
-
-m5, m6, m7, m8 = st.columns(4)
-m5.metric("Revisión", int(stage_counts.get("review", 0)))
-m6.metric("Completados", int(stage_counts.get("done", 0)))
-m7.metric("En ejecución", int(stage_counts.get("running", 0)))
-m8.metric("Desconocidos", int(stage_counts.get("unknown", 0)))
-
-with st.expander("Detalle de estados", expanded=False):
-    st.write("Recuento por estado del flujo")
-    st.dataframe(
-        pd.DataFrame([workflow_status_counts]), width="stretch", hide_index=True
-    )
-    st.write("Recuento por estado del formulario")
-    st.dataframe(pd.DataFrame([form_status_counts]), width="stretch", hide_index=True)
-    st.write("Nodos en ejecución")
-    st.dataframe(pd.DataFrame([running_nodes]), width="stretch", hide_index=True)
-
-st.subheader("Elementos en ejecución")
-running_total = int(stage_counts.get("running", 0))
-if running_total > 0:
-    try:
-        running_rows = api_get(
-            "/books",
-            params={"limit": 5000, **scope_params(scope_block, scope_module)},
-            timeout=20.0,
+    with st.form("orq_cover_download_form", border=True):
+        cover_id_col, cover_limit_col = st.columns([2, 1])
+        with cover_id_col:
+            cover_book_id = st.text_input(
+                "ID del libro (opcional)",
+                placeholder="03B0001",
+                key="orq_cover_book_id",
+            )
+        with cover_limit_col:
+            cover_limit = st.number_input(
+                "Lote de portadas",
+                min_value=1,
+                max_value=5000,
+                value=20,
+                key="orq_cover_limit",
+            )
+        cover_overwrite = st.checkbox(
+            "Volver a descargar portadas ya procesadas",
+            value=False,
+            key="orq_cover_overwrite",
         )
-        running_items = [
-            row
-            for row in running_rows
-            if str(row.get("workflow_status") or "").strip().lower() == "running"
-        ]
-        if running_items:
-            running_table = []
-            for row in running_items:
-                node = str(row.get("workflow_current_node") or "").strip()
-                stage = str(row.get("pipeline_stage") or "").strip()
-                workflow_action = str(row.get("workflow_action") or "").strip()
+        download_covers = st.form_submit_button(
+            "Descargar portadas",
+            icon=":material/download:",
+            type="primary",
+            width="stretch",
+        )
 
-                llm_value = ""
-                if "llm=" in workflow_action:
-                    llm_value = workflow_action.split("llm=", maxsplit=1)[1].strip()
-                    if "|" in llm_value:
-                        llm_value = llm_value.split("|", maxsplit=1)[0].strip()
-
-                if not llm_value and node == "ocr":
-                    provider = str(row.get("ocr_provider") or "").strip()
-                    model = str(row.get("ocr_model") or "").strip()
-                    if provider and model:
-                        llm_value = f"{provider}/{model}"
-                    elif provider or model:
-                        llm_value = provider or model
-
-                running_table.append(
-                    {
-                        "id": str(row.get("id") or ""),
-                        "nodo": node or "(sin nodo)",
-                        "etapa": stage or "(sin etapa)",
-                        "acción": workflow_action
-                        or (f"Ejecutando {node}" if node else "Ejecutando flujo"),
-                        "llm": llm_value or "-",
-                        "intento": int(row.get("workflow_attempt") or 0),
-                        "updated_at": row.get("updated_at"),
-                    }
-                )
-            st.dataframe(pd.DataFrame(running_table), width="stretch", hide_index=True)
-        else:
-            st.info("No hay elementos en ejecución ahora mismo.")
-    except Exception as exc:
-        st.error(f"No se pudo cargar el detalle de la ejecución: {exc}")
-else:
-    st.success("No hay elementos en ejecución.")
-
-review_queue = snapshot.get("review_queue", [])
-st.subheader("Cola de revisión")
-
-if review_queue:
-    queue_df = pd.DataFrame(review_queue)
-    st.dataframe(queue_df, width="stretch", hide_index=True)
-
-    ids = [str(item.get("id") or "").strip() for item in review_queue]
-    ids = [item for item in ids if item]
-
-    selected_review_id = st.selectbox("Libro en revisión", ids, key="review_book_id")
-    action = st.selectbox(
-        "Acción",
-        [
-            "approve",
-            "retry_from_ocr",
-            "retry_from_metadata",
-            "retry_from_catalog",
-            "retry_from_cover",
-        ],
-        key="review_action",
-    )
-
-    col_action, col_mark = st.columns(2)
-    with col_action:
-        if st.button("Aplicar acción de revisión"):
-            try:
-                payload = {"action": action, "max_attempts": int(max_attempts)}
-                payload["ocr_provider"] = ocr_provider
-                payload["ocr_model"] = ocr_model.strip() or None
-                payload["ocr_resize_to_1800"] = bool(ocr_resize_to_1800)
-                payload["catalog_provider"] = catalog_provider
-                payload["catalog_model"] = catalog_model.strip() or None
-                result = api_post(
-                    f"/workflow/review/{selected_review_id}",
-                    json=payload,
+    if download_covers:
+        try:
+            with st.spinner("Descargando las portadas pendientes…"):
+                cover_result = api_post(
+                    "/cover/download",
+                    json={
+                        "book_id": cover_book_id.strip() or None,
+                        "block": scope_block,
+                        "module": scope_module,
+                        "limit": int(cover_limit),
+                        "overwrite": bool(cover_overwrite),
+                    },
                     timeout=None,
                 )
-                st.success("Acción aplicada")
-                st.json(result)
-            except Exception as exc:
-                st.error(f"No se pudo aplicar la acción: {exc}")
-
-    with col_mark:
-        if st.button("Marcar de nuevo para revisión"):
-            try:
-                payload = {
-                    "reason": "Marcado manual desde la página de orquestación",
-                    "node": "manual",
-                }
-                result = api_post(
-                    f"/workflow/review/{selected_review_id}/mark", json=payload
+            st.success(
+                "Rama de portadas completada: "
+                f"{cover_result.get('processed', 0)} de "
+                f"{cover_result.get('requested', 0)} procesadas."
+            )
+            cover_items = cover_result.get("items", [])
+            if cover_items:
+                st.dataframe(
+                    pd.DataFrame(cover_items), width="stretch", hide_index=True
                 )
-                st.success("Libro marcado para revisión")
-                st.json(result)
-            except Exception as exc:
-                st.error(f"No se pudo marcar para revisión: {exc}")
-else:
-    st.success("No hay libros en cola de revisión.")
+        except Exception as exc:
+            st.error(f"Error descargando portadas: {exc}")
+st.divider()
+with st.expander("Información técnica del flujo", expanded=False):
+    st.caption(
+        "Definición interna del grafo de ejecución. Esta información sirve para "
+        "diagnóstico y no es necesaria para operar el catálogo."
+    )
+    try:
+        graph = api_get("/workflow/graph", timeout=12.0)
+        st.write("LangGraph disponible:", graph.get("langgraph_available"))
+        graph_col_a, graph_col_b = st.columns(2)
+        with graph_col_a:
+            st.markdown("**Nodos**")
+            st.dataframe(
+                pd.DataFrame(graph.get("nodes", [])),
+                width="stretch",
+                hide_index=True,
+            )
+        with graph_col_b:
+            st.markdown("**Aristas**")
+            st.dataframe(
+                pd.DataFrame(graph.get("edges", [])),
+                width="stretch",
+                hide_index=True,
+            )
+    except Exception as exc:
+        st.error(f"No se pudo cargar la definición del flujo: {exc}")

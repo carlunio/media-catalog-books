@@ -2,6 +2,8 @@ import os
 import socket
 from pathlib import Path
 
+from ..llm_models import DEFAULT_OPENAI_CATALOG_MODEL, DEFAULT_OPENAI_OCR_MODEL
+
 SNAPSHOTS_REPO_DIRNAME = "media-catalog-books"
 
 
@@ -97,7 +99,7 @@ OPENLIBRARY_CONTACT = os.getenv("OPENLIBRARY_CONTACT", "").strip()
 
 OCR_PROVIDER = os.getenv("OCR_PROVIDER", "ollama").strip().lower() or "ollama"
 OCR_OPENAI_MODEL = os.getenv(
-    "OCR_OPENAI_MODEL", os.getenv("OCR_VISION_MODEL", "gpt-4o-mini")
+    "OCR_OPENAI_MODEL", os.getenv("OCR_VISION_MODEL", DEFAULT_OPENAI_OCR_MODEL)
 )
 OCR_OLLAMA_MODEL = os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest")
 OCR_RESIZE_TO_1800_DEFAULT = _as_bool(os.getenv("OCR_RESIZE_TO_1800_DEFAULT"), False)
@@ -107,12 +109,13 @@ OCR_OLLAMA_FALLBACK_MODELS = _as_csv_list(
     default=[],
 )
 OCR_USE_SIDECAR = _as_bool(os.getenv("OCR_USE_SIDECAR"), False)
-CATALOG_MODEL = os.getenv("CATALOG_MODEL", "gpt-4o-mini")
+CATALOG_MODEL = os.getenv("CATALOG_MODEL", DEFAULT_OPENAI_CATALOG_MODEL)
 CATALOG_OPENAI_MODEL = os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL)
 CATALOG_OLLAMA_MODEL = os.getenv("CATALOG_OLLAMA_MODEL", "qwen2.5:14b")
 CATALOG_PROVIDER = os.getenv("CATALOG_PROVIDER", "ollama").strip().lower() or "ollama"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 LLM_TIMEOUT_SECONDS = _as_float(os.getenv("LLM_TIMEOUT_SECONDS", "300"), 300.0)
+OCR_TIMEOUT_SECONDS = max(1.0, _as_float(os.getenv("OCR_TIMEOUT_SECONDS", "60"), 60.0))
 OLLAMA_TIMEOUT_SECONDS = _as_optional_float(
     os.getenv("OLLAMA_TIMEOUT_SECONDS"), LLM_TIMEOUT_SECONDS
 )
@@ -159,6 +162,7 @@ if __name__ == "__main__":
     print("CATALOG_PROVIDER:", CATALOG_PROVIDER)
     print("OLLAMA_BASE_URL:", OLLAMA_BASE_URL)
     print("LLM_TIMEOUT_SECONDS:", LLM_TIMEOUT_SECONDS)
+    print("OCR_TIMEOUT_SECONDS:", OCR_TIMEOUT_SECONDS)
     print("OLLAMA_TIMEOUT_SECONDS:", OLLAMA_TIMEOUT_SECONDS)
     print("CATALOG_ARBITER_ENABLED:", CATALOG_ARBITER_ENABLED)
     print("CATALOG_ARBITER_PROVIDER:", CATALOG_ARBITER_PROVIDER)

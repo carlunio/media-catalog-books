@@ -17,9 +17,7 @@ def _print_json(data: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Snapshot management for media-catalog-books"
-    )
+    parser = argparse.ArgumentParser(description="Gestión de instantáneas de MC Books")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("status", help="Show snapshot configuration and state")

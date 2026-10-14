@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Media Catalog Books - Detener
+Name=MC Books - Detener
 Comment=Detiene el backend y el frontend
 Terminal=true
 Icon=utilities-terminal

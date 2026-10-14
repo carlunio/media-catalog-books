@@ -67,6 +67,7 @@ def test_env_example_is_a_keyless_local_first_configuration():
     assert values["SYNC_ACTOR"] == ""
     assert values["SYNC_DEVICE"] == ""
     assert values["OCR_PROVIDER"] == "ollama"
+    assert values["OCR_TIMEOUT_SECONDS"] == "60"
     assert values["CATALOG_PROVIDER"] == "ollama"
 
 
@@ -358,7 +359,7 @@ def test_environment_keeps_venv_when_only_project_metadata_changes(
 
 def test_stop_requests_a_coordinated_controller_shutdown_first(monkeypatch):
     calls: list[tuple[int, tuple[str, ...], bool]] = []
-    matches = iter((False,))
+    matches = iter((False, False))
 
     monkeypatch.setattr(
         appctl,
@@ -369,15 +370,61 @@ def test_stop_requests_a_coordinated_controller_shutdown_first(monkeypatch):
         appctl,
         "_terminate_pid",
         lambda pid, tokens, process_group: (
-            calls.append((pid, tuple(tokens), process_group)) or True
+            calls.append((pid, tuple(tokens), process_group)) or pid == 10
         ),
     )
     monkeypatch.setattr(appctl, "_wait_until_stopped", lambda *args, **kwargs: None)
     monkeypatch.setattr(appctl, "_pid_matches", lambda *args, **kwargs: next(matches))
+    monkeypatch.setattr(
+        appctl,
+        "_force_terminate_pid",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("El cierre normal debía ser suficiente")
+        ),
+    )
     monkeypatch.setattr(appctl, "_remove_runtime_state", lambda **kwargs: None)
 
     assert appctl._stop_recorded_application() is True
-    assert calls == [(10, ("appctl.py", "launch"), False)]
+    assert calls == [
+        (10, ("appctl.py", "launch"), False),
+        (20, ("streamlit", str(appctl.FRONTEND_APP)), True),
+        (30, ("uvicorn", appctl.BACKEND_APP), True),
+    ]
+
+
+def test_stop_forces_a_process_that_ignores_graceful_shutdown(monkeypatch):
+    events = []
+    matches = iter((True, False))
+
+    monkeypatch.setattr(appctl, "_terminate_pid", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        appctl,
+        "_wait_until_stopped",
+        lambda pid, tokens, timeout: events.append(("wait", pid, timeout)),
+    )
+    monkeypatch.setattr(appctl, "_pid_matches", lambda *args, **kwargs: next(matches))
+    monkeypatch.setattr(
+        appctl,
+        "_force_terminate_pid",
+        lambda pid, tokens, process_group: (
+            events.append(("force", pid, process_group)) or True
+        ),
+    )
+
+    assert (
+        appctl._stop_managed_pid(
+            42,
+            ("uvicorn", appctl.BACKEND_APP),
+            process_group=True,
+            graceful_timeout=1.5,
+        )
+        is True
+    )
+    assert events == [
+        ("wait", 42, 1.5),
+        ("force", 42, True),
+        ("wait", 42, 3.0),
+    ]
 
 
 def test_automatic_update_skips_a_non_stable_branch(monkeypatch):

@@ -520,7 +520,7 @@ def _validate_book_database(database_path: Path) -> dict[str, Any]:
     if missing:
         missing_text = ", ".join(f"{schema}.{name}" for schema, name in missing)
         raise SnapshotError(
-            "La base del snapshot no pertenece a Media Catalog Books o tiene "
+            "La base del snapshot no pertenece a MC Books o tiene "
             f"un esquema incompleto. Faltan: {missing_text}."
         )
     return {"checked_relations": len(REQUIRED_BOOK_RELATIONS)}

@@ -2,7 +2,6 @@ import json
 import re
 from pathlib import Path
 
-import requests
 import streamlit as st
 from PIL import Image, ImageOps
 
@@ -12,13 +11,21 @@ try:
         api_post,
         api_put,
         configure_page,
+        render_page_header,
         CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
         CATALOG_OPENAI_MODEL_DEFAULT,
         CATALOG_PROVIDER_DEFAULT,
+        load_ollama_models,
         OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
         OCR_OPENAI_MODEL_DEFAULT,
         OCR_PROVIDER_DEFAULT,
         OCR_RESIZE_TO_1800_DEFAULT,
+        render_ollama_model_selector,
+        render_openai_catalog_model_selector,
+        render_openai_ocr_model_selector,
+        seed_widget_once,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -30,13 +37,21 @@ except ModuleNotFoundError:  # pragma: no cover
         api_post,
         api_put,
         configure_page,
+        render_page_header,
         CATALOG_OLLAMA_MODEL_DEFAULT,
+        CATALOG_OLLAMA_MODEL_SUGGESTIONS,
         CATALOG_OPENAI_MODEL_DEFAULT,
         CATALOG_PROVIDER_DEFAULT,
+        load_ollama_models,
         OCR_OLLAMA_MODEL_DEFAULT,
+        OCR_OLLAMA_MODEL_SUGGESTIONS,
         OCR_OPENAI_MODEL_DEFAULT,
         OCR_PROVIDER_DEFAULT,
         OCR_RESIZE_TO_1800_DEFAULT,
+        render_ollama_model_selector,
+        render_openai_catalog_model_selector,
+        render_openai_ocr_model_selector,
+        seed_widget_once,
         scope_params,
         select_book_id,
         select_module_scope,
@@ -48,13 +63,24 @@ STAGE_ORDER = ("ocr", "metadata", "catalog", "cover")
 STAGE_LABELS = {
     "ocr": "OCR",
     "metadata": "Metadatos",
-    "catalog": "Catalog",
-    "cover": "Cover",
+    "catalog": "Catalogación",
+    "cover": "Portada",
 }
 
-configure_page("Revisión OCR | Media Catalog Books")
-st.title("Fase 2 · Revisión OCR e ISBN")
+configure_page("Revisión OCR | MC Books")
+render_page_header(
+    phase="2",
+    title="Revisión OCR e ISBN",
+    description=(
+        "Comprueba el texto reconocido y el ISBN, y decide cómo debe continuar "
+        "cada ficha pendiente."
+    ),
+)
 show_backend_status()
+
+flash_success = str(st.session_state.pop("book_review_flash_success", "") or "").strip()
+if flash_success:
+    st.success(flash_success)
 
 
 def _load_image_with_orientation(path: str):
@@ -307,6 +333,9 @@ scope_block, scope_module = select_module_scope(
 if not scope_module:
     st.stop()
 
+st.subheader("Libro que vas a revisar")
+st.caption("Filtra la cola y recorre los registros del módulo seleccionado.")
+
 mode_labels = {
     "all": "Mostrar todos",
     "review": "Solo en revisión",
@@ -315,18 +344,24 @@ mode_labels = {
 if "book_review_filter_mode" not in st.session_state:
     st.session_state["book_review_filter_mode"] = "all"
 
-filter_mode = st.segmented_control(
-    "Filtro",
-    options=list(mode_labels.keys()),
-    default=st.session_state["book_review_filter_mode"],
-    format_func=lambda value: mode_labels.get(str(value), str(value)),
-    key="book_review_filter_mode",
-    width="stretch",
-)
+filter_col, limit_col = st.columns([3, 1])
+with filter_col:
+    filter_mode = st.segmented_control(
+        "Libros que se mostrarán",
+        options=list(mode_labels.keys()),
+        format_func=lambda value: mode_labels.get(str(value), str(value)),
+        key="book_review_filter_mode",
+        width="stretch",
+    )
+with limit_col:
+    limit = st.number_input(
+        "Límite de resultados",
+        min_value=1,
+        max_value=5000,
+        value=1200,
+    )
 if filter_mode is None:
     filter_mode = "all"
-
-limit = st.number_input("Límite", min_value=1, max_value=5000, value=1200)
 
 try:
     rows = api_get(
@@ -373,14 +408,20 @@ current_index = book_ids.index(selected_id)
 
 col_prev, col_next = st.columns(2)
 with col_prev:
-    if st.button("Anterior", disabled=current_index == 0, key="book_ocr_review_prev"):
+    if st.button(
+        "← Anterior",
+        disabled=current_index == 0,
+        key="book_ocr_review_prev",
+        width="stretch",
+    ):
         st.session_state[selector_pending_key] = book_ids[current_index - 1]
         st.rerun()
 with col_next:
     if st.button(
-        "Siguiente",
+        "Siguiente →",
         disabled=current_index == len(book_ids) - 1,
         key="book_ocr_review_next",
+        width="stretch",
     ):
         st.session_state[selector_pending_key] = book_ids[current_index + 1]
         st.rerun()
@@ -408,22 +449,25 @@ with left:
         except (FileNotFoundError, OSError) as exc:
             st.warning(f"No se pudo cargar la imagen: {exc}")
     else:
-        st.warning("No hay imagen local accesible")
+        st.info("No hay imagen local accesible")
 
     st.markdown("### Estado")
-    st.json(
-        {
-            "id": book.get("id"),
-            "block": book.get("block"),
-            "module": book.get("module"),
-            "pipeline_stage": book.get("pipeline_stage"),
-            "workflow_status": book.get("workflow_status"),
-            "workflow_review_reason": book.get("workflow_review_reason"),
-            "ocr_status": book.get("ocr_status"),
-            "ocr_provider": book.get("ocr_provider"),
-            "ocr_model": book.get("ocr_model"),
-        }
-    )
+    with st.container(border=True):
+        pipeline_stage = str(book.get("pipeline_stage") or "—")
+        workflow_status = str(book.get("workflow_status") or "—")
+        ocr_status = str(book.get("ocr_status") or "—")
+        provider = str(book.get("ocr_provider") or "—")
+        model = str(book.get("ocr_model") or "—")
+        st.markdown(f"**Libro:** {book.get('id') or selected_id}")
+        st.caption(
+            f"Etapa: {STAGE_LABELS.get(pipeline_stage, pipeline_stage)} · "
+            f"Flujo: {workflow_status} · OCR: {ocr_status}"
+        )
+        st.caption(f"Modelo OCR: {provider} / {model}")
+        review_detail = str(book.get("workflow_review_reason") or "").strip()
+        if review_detail:
+            st.markdown("**Motivo de revisión**")
+            st.caption(review_detail)
 
 with right:
     st.markdown("### OCR + ISBN")
@@ -431,10 +475,10 @@ with right:
     metrics_a, metrics_b, metrics_c = st.columns(3)
     metrics_a.metric("ISBN validado", "sí" if bool(book.get("isbn")) else "no")
     metrics_b.metric(
-        "Cand. detectados", len(validation_from_text.get("raw_candidates") or [])
+        "Candidatos detectados", len(validation_from_text.get("raw_candidates") or [])
     )
     metrics_c.metric(
-        "Cand. válidos", len(validation_from_text.get("valid_candidates") or [])
+        "Candidatos válidos", len(validation_from_text.get("valid_candidates") or [])
     )
 
     if validation_from_text.get("isbn"):
@@ -496,9 +540,24 @@ with right:
         with form_col_a:
             suggest = st.form_submit_button("Extraer ISBN desde texto")
         with form_col_b:
-            save = st.form_submit_button("Guardar OCR revisado", type="primary")
+            save = st.form_submit_button("Guardar OCR revisado")
         with form_col_c:
-            consolidate_isbn = st.form_submit_button("Consolidar ISBN en BBDD")
+            if _is_ocr_review(book):
+                save_and_leave_review = st.form_submit_button(
+                    "Guardar ISBN válido y salir de revisión",
+                    type="primary",
+                    help=(
+                        "Valida la suma de comprobación, guarda el OCR y el ISBN, "
+                        "y deja el libro preparado para continuar con metadatos."
+                    ),
+                )
+                consolidate_isbn = False
+            else:
+                consolidate_isbn = st.form_submit_button(
+                    "Guardar ISBN en la base de datos",
+                    type="primary",
+                )
+                save_and_leave_review = False
 
     if suggest:
         suggested = _derive_isbn_from_text(st.session_state.get(credits_key, ""))
@@ -517,7 +576,6 @@ with right:
         }
         try:
             result = api_put(f"/books/{selected_id}/ocr", json=payload, timeout=20.0)
-            st.success("OCR actualizado")
             if isinstance(result, dict):
                 isbn_value = str(result.get("isbn") or "").strip()
                 isbn_raw_value = str(result.get("isbn_raw") or "").strip()
@@ -530,9 +588,66 @@ with right:
                     )
                 with st.expander("Resultado de guardado", expanded=False):
                     st.json(result)
+            if _is_ocr_review(book):
+                st.session_state["book_review_flash_success"] = (
+                    "OCR actualizado. El libro sigue en revisión; usa "
+                    "«Guardar ISBN válido y salir de revisión» para completarla."
+                )
+            else:
+                st.session_state["book_review_flash_success"] = "OCR actualizado"
             st.rerun()
         except Exception as exc:
             st.error(f"No se pudo actualizar OCR: {exc}")
+
+    if save_and_leave_review:
+        manual_candidate = (
+            str(st.session_state.get(isbn_key, "")).strip()
+            or str(st.session_state.get(isbn_raw_key, "")).strip()
+        )
+        if not _is_valid_isbn(manual_candidate):
+            st.error(
+                "No se puede salir de revisión: introduce un ISBN-10 o ISBN-13 "
+                "con una suma de comprobación válida."
+            )
+        else:
+            payload = {
+                "credits_text": (
+                    str(st.session_state.get(credits_key, "")).strip() or None
+                ),
+                "isbn_raw": (
+                    str(st.session_state.get(isbn_raw_key, "")).strip() or None
+                ),
+                "isbn": str(st.session_state.get(isbn_key, "")).strip() or None,
+            }
+            try:
+                result = api_put(
+                    f"/books/{selected_id}/ocr",
+                    json=payload,
+                    timeout=20.0,
+                )
+                if not isinstance(result, dict) or not bool(result.get("isbn_valid")):
+                    st.error(
+                        "El backend no ha validado el ISBN. El libro continúa en revisión."
+                    )
+                else:
+                    api_post(
+                        f"/workflow/review/{selected_id}",
+                        json={"action": "approve"},
+                        timeout=60.0,
+                    )
+                    isbn_value = str(result.get("isbn") or "").strip()
+                    isbn_raw_value = str(result.get("isbn_raw") or "").strip()
+                    _queue_form_patch(
+                        selected_id,
+                        isbn_raw=isbn_raw_value,
+                        isbn=isbn_value,
+                    )
+                    st.session_state["book_review_flash_success"] = (
+                        f"ISBN {isbn_value} guardado. El libro ha salido de revisión."
+                    )
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"No se pudo guardar y aprobar el ISBN: {exc}")
 
     if consolidate_isbn:
         payload = {
@@ -543,13 +658,15 @@ with right:
         }
         try:
             result = api_put(f"/books/{selected_id}/ocr", json=payload, timeout=20.0)
-            st.success("ISBN consolidado en BBDD")
             if isinstance(result, dict):
                 isbn_value = str(result.get("isbn") or "").strip()
                 isbn_raw_value = str(result.get("isbn_raw") or "").strip()
                 _queue_form_patch(selected_id, isbn_raw=isbn_raw_value, isbn=isbn_value)
                 with st.expander("Resultado de consolidación ISBN", expanded=False):
                     st.json(result)
+            st.session_state["book_review_flash_success"] = (
+                "ISBN guardado en la base de datos"
+            )
             st.rerun()
         except Exception as exc:
             st.error(f"No se pudo consolidar ISBN: {exc}")
@@ -584,75 +701,262 @@ if bool(book.get("workflow_needs_review")):
     if retry_selector_key not in st.session_state:
         st.session_state[retry_selector_key] = default_retry_stage
 
-    action_col_a, action_col_b = st.columns(2)
-    with action_col_a:
-        approve_label = (
-            "Aceptar que no tiene ISBN y salir de la revisión"
-            if accepts_missing_isbn
-            else "Aprobar y salir de la revisión"
-        )
-        if st.button(approve_label, key="book_review_approve"):
-            try:
-                api_post(
-                    f"/workflow/review/{selected_id}",
-                    json={"action": "approve"},
-                    timeout=60.0,
+    approve_label = (
+        "Aceptar que no tiene ISBN y salir de la revisión"
+        if accepts_missing_isbn
+        else "Aprobar y salir de la revisión"
+    )
+    if st.button(approve_label, key="book_review_approve"):
+        try:
+            api_post(
+                f"/workflow/review/{selected_id}",
+                json={"action": "approve"},
+                timeout=60.0,
+            )
+            if accepts_missing_isbn:
+                st.success(
+                    "Ausencia de ISBN aceptada. El libro puede continuar desde los metadatos."
                 )
-                if accepts_missing_isbn:
-                    st.success(
-                        "Ausencia de ISBN aceptada. El libro puede continuar desde los metadatos."
-                    )
-                else:
-                    st.success("Libro aprobado")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"No se pudo aprobar el libro: {exc}")
+            else:
+                st.success("Libro aprobado")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo aprobar el libro: {exc}")
 
-    with action_col_b:
+    with st.expander("Configurar y repetir una fase", expanded=True):
         retry_stage = st.selectbox(
             "Etapa a reintentar",
             retry_options,
             key=retry_selector_key,
             format_func=lambda value: STAGE_LABELS.get(str(value), str(value)),
         )
-        if st.button("Reintentar", key="book_review_retry"):
-            try:
-                ocr_provider_default = OCR_PROVIDER_DEFAULT
-                if ocr_provider_default not in {"openai", "ollama"}:
-                    ocr_provider_default = "ollama"
-                catalog_provider_default = CATALOG_PROVIDER_DEFAULT
-                if catalog_provider_default not in {"openai", "ollama"}:
-                    catalog_provider_default = "openai"
 
-                ocr_model_default = (
-                    OCR_OPENAI_MODEL_DEFAULT
-                    if ocr_provider_default == "openai"
-                    else OCR_OLLAMA_MODEL_DEFAULT
-                )
-                catalog_model_default = (
-                    CATALOG_OPENAI_MODEL_DEFAULT
-                    if catalog_provider_default == "openai"
-                    else CATALOG_OLLAMA_MODEL_DEFAULT
-                )
-                api_post(
-                    f"/workflow/review/{selected_id}",
-                    json={
-                        "action": f"retry_from_{retry_stage}",
-                        "ocr_provider": ocr_provider_default,
-                        "ocr_model": ocr_model_default,
-                        "ocr_resize_to_1800": bool(OCR_RESIZE_TO_1800_DEFAULT),
-                        "catalog_provider": catalog_provider_default,
-                        "catalog_model": catalog_model_default,
-                    },
-                    timeout=None,
-                )
-                stage_label = STAGE_LABELS.get(str(retry_stage), str(retry_stage))
-                st.success(f"Flujo relanzado desde {stage_label}")
-                st.rerun()
-            except requests.exceptions.ReadTimeout:
-                st.error("Tiempo de espera agotado al relanzar el flujo")
+        retry_stop_after: str | None = None
+        ocr_in_retry = False
+        metadata_in_retry = False
+        catalog_in_retry = False
+
+        if retry_stage == "cover":
+            st.caption(
+                "La descarga de portada se repetirá con sobrescritura y no altera "
+                "las etapas del flujo principal."
+            )
+        else:
+            main_stages = list(STAGE_ORDER[:-1])
+            retry_start_idx = main_stages.index(retry_stage)
+            stop_options = ["(sin límite)", *main_stages[retry_start_idx:]]
+            stop_key = f"book_review_retry_stop_after_{selected_id}"
+            previous_stage_key = f"book_review_retry_previous_stage_{selected_id}"
+            previous_stage = str(st.session_state.get(previous_stage_key) or "").strip()
+            if (
+                stop_key not in st.session_state
+                or previous_stage != retry_stage
+                or st.session_state.get(stop_key) not in stop_options
+            ):
+                st.session_state[stop_key] = retry_stage
+            selected_stop = st.selectbox(
+                "Parar en",
+                stop_options,
+                key=stop_key,
+                format_func=lambda value: (
+                    value
+                    if value == "(sin límite)"
+                    else STAGE_LABELS.get(str(value), str(value))
+                ),
+            )
+            st.session_state[previous_stage_key] = retry_stage
+            retry_stop_after = (
+                None if selected_stop == "(sin límite)" else str(selected_stop)
+            )
+            retry_stop_idx = (
+                len(main_stages) - 1
+                if retry_stop_after is None
+                else main_stages.index(retry_stop_after)
+            )
+            ocr_in_retry = retry_start_idx <= 0 <= retry_stop_idx
+            metadata_in_retry = retry_start_idx <= 1 <= retry_stop_idx
+            catalog_in_retry = retry_start_idx <= 2 <= retry_stop_idx
+
+        max_attempts_key = f"book_review_retry_max_attempts_{selected_id}"
+        seed_widget_once(max_attempts_key, 2)
+        retry_max_attempts = st.number_input(
+            "Reintentos máximos",
+            min_value=0,
+            max_value=20,
+            key=max_attempts_key,
+            disabled=retry_stage == "cover",
+        )
+
+        ollama_models: list[str] = []
+        if ocr_in_retry or catalog_in_retry:
+            try:
+                ollama_models = load_ollama_models()
             except Exception as exc:
-                st.error(f"No se pudo relanzar el flujo: {exc}")
+                st.warning(f"No se pudieron cargar modelos de Ollama: {exc}")
+
+        retry_ocr_provider: str | None = None
+        retry_ocr_model: str | None = None
+        retry_ocr_resize = False
+        if ocr_in_retry:
+            st.caption("Configuración de OCR")
+            ocr_col_a, ocr_col_b = st.columns([1, 2])
+            with ocr_col_a:
+                ocr_provider_options = ["openai", "ollama"]
+                ocr_provider_default = (
+                    OCR_PROVIDER_DEFAULT
+                    if OCR_PROVIDER_DEFAULT in ocr_provider_options
+                    else "ollama"
+                )
+                ocr_provider_key = f"book_review_retry_ocr_provider_{selected_id}"
+                seed_widget_once(ocr_provider_key, ocr_provider_default)
+                retry_ocr_provider = st.selectbox(
+                    "Proveedor de OCR",
+                    ocr_provider_options,
+                    key=ocr_provider_key,
+                )
+            with ocr_col_b:
+                if retry_ocr_provider == "ollama":
+                    retry_ocr_model = render_ollama_model_selector(
+                        label="Modelo OCR",
+                        key=f"book_review_retry_ocr_model_ollama_{selected_id}",
+                        installed_models=ollama_models,
+                        default_model=OCR_OLLAMA_MODEL_DEFAULT,
+                        suggested_models=OCR_OLLAMA_MODEL_SUGGESTIONS,
+                    )
+                else:
+                    retry_ocr_model = render_openai_ocr_model_selector(
+                        label="Modelo OCR",
+                        key=f"book_review_retry_ocr_model_openai_{selected_id}",
+                        default_model=OCR_OPENAI_MODEL_DEFAULT,
+                    )
+
+                resize_key = f"book_review_retry_ocr_resize_{selected_id}"
+                seed_widget_once(resize_key, OCR_RESIZE_TO_1800_DEFAULT)
+                retry_ocr_resize = st.checkbox(
+                    "Reducir imagen a 1800 px (solo para glm-ocr)",
+                    key=resize_key,
+                    help=(
+                        "Si está activo y el modelo OCR empieza por 'glm-ocr', "
+                        "la imagen se reduce a un lado máximo de 1800 px."
+                    ),
+                )
+
+        retry_download_cover = False
+        if metadata_in_retry:
+            download_cover_key = (
+                f"book_review_retry_download_cover_after_metadata_{selected_id}"
+            )
+            seed_widget_once(download_cover_key, True)
+            retry_download_cover = st.checkbox(
+                "Descargar portadas al obtener metadatos",
+                key=download_cover_key,
+                help=(
+                    "Después de consultar las API, descarga la portada si este ID "
+                    "todavía no tiene una. Un fallo de portada no detiene el flujo."
+                ),
+            )
+
+        retry_catalog_provider: str | None = None
+        retry_catalog_model: str | None = None
+        if catalog_in_retry:
+            st.caption("Configuración de catalogación automática")
+            catalog_col_a, catalog_col_b = st.columns([1, 2])
+            with catalog_col_a:
+                catalog_provider_options = ["openai", "ollama"]
+                catalog_provider_default = (
+                    CATALOG_PROVIDER_DEFAULT
+                    if CATALOG_PROVIDER_DEFAULT in catalog_provider_options
+                    else "ollama"
+                )
+                catalog_provider_key = (
+                    f"book_review_retry_catalog_provider_{selected_id}"
+                )
+                seed_widget_once(catalog_provider_key, catalog_provider_default)
+                retry_catalog_provider = st.selectbox(
+                    "Proveedor del catálogo",
+                    catalog_provider_options,
+                    key=catalog_provider_key,
+                )
+            with catalog_col_b:
+                if retry_catalog_provider == "ollama":
+                    retry_catalog_model = render_ollama_model_selector(
+                        label="Modelo del catálogo",
+                        key=f"book_review_retry_catalog_model_ollama_{selected_id}",
+                        installed_models=ollama_models,
+                        default_model=CATALOG_OLLAMA_MODEL_DEFAULT,
+                        suggested_models=CATALOG_OLLAMA_MODEL_SUGGESTIONS,
+                    )
+                else:
+                    catalog_model_key = (
+                        f"book_review_retry_catalog_model_openai_{selected_id}"
+                    )
+                    retry_catalog_model = render_openai_catalog_model_selector(
+                        label="Modelo del catálogo",
+                        key=catalog_model_key,
+                        default_model=CATALOG_OPENAI_MODEL_DEFAULT,
+                    )
+
+        st.caption(
+            "La repetición sobrescribe desde la etapa elegida; la ficha que está "
+            "en revisión queda autorizada para ese reintento."
+        )
+        if st.button(
+            "Reintentar con esta configuración",
+            key="book_review_retry",
+            type="primary",
+        ):
+            try:
+                with st.spinner("Enviando el reintento a Orquestación…"):
+                    response = api_post(
+                        "/workflow/jobs",
+                        json={
+                            "book_id": selected_id,
+                            "block": scope_block,
+                            "module": scope_module,
+                            "limit": 1,
+                            "start_stage": retry_stage,
+                            "action": f"retry_from_{retry_stage}",
+                            "stop_after": retry_stop_after,
+                            "overwrite": True,
+                            "max_attempts": int(retry_max_attempts),
+                            "download_cover_after_metadata": bool(retry_download_cover),
+                            "ocr_provider": retry_ocr_provider,
+                            "ocr_model": (
+                                retry_ocr_model.strip()
+                                if isinstance(retry_ocr_model, str)
+                                and retry_ocr_model.strip()
+                                else None
+                            ),
+                            "ocr_resize_to_1800": bool(retry_ocr_resize),
+                            "catalog_provider": retry_catalog_provider,
+                            "catalog_model": (
+                                retry_catalog_model.strip()
+                                if isinstance(retry_catalog_model, str)
+                                and retry_catalog_model.strip()
+                                else None
+                            ),
+                        },
+                        timeout=15.0,
+                    )
+                started_job = response.get("job") or {}
+                started_job_id = str(started_job.get("job_id") or "").strip()
+                if not started_job_id:
+                    raise RuntimeError(
+                        "El backend no devolvió el identificador del trabajo"
+                    )
+                st.session_state["orq_last_workflow_job_id"] = started_job_id
+                stage_label = STAGE_LABELS.get(str(retry_stage), str(retry_stage))
+                st.success(
+                    f"Reintento desde {stage_label} enviado a Orquestación. "
+                    "Puedes seguir allí su progreso y detenerlo."
+                )
+                st.page_link(
+                    "pages/01_orquestacion.py",
+                    label="Abrir Orquestación",
+                    icon=":material/account_tree:",
+                )
+            except Exception as exc:
+                st.error(f"No se pudo enviar el reintento a Orquestación: {exc}")
 else:
     st.info("Este libro no está en revisión.")
 

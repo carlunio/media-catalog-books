@@ -64,6 +64,61 @@
     color: #5c4837;
 }
 
+/* En los campos con ayuda, el nombre completo abre la explicación. */
+div[class*="st-key-field-help-"] [data-testid="stPopover"] {
+    margin-bottom: 0.3rem;
+    width: 100%;
+}
+
+div[class*="st-key-field-help-"] button[kind="tertiary"] {
+    border: 1px solid #7f8a98;
+    border-radius: 2px;
+    color: #2b415b;
+    font-size: 0.98rem;
+    font-weight: 700;
+    justify-content: flex-start;
+    line-height: 1.1rem;
+    min-height: 2.1rem;
+    padding: 0.45rem 0.55rem;
+    text-align: left;
+}
+
+div[class*="st-key-field-help-"] button[kind="tertiary"] p {
+    font-weight: 700;
+    text-align: left;
+    width: 100%;
+}
+
+div[class*="st-key-field-help-"] button[kind="tertiary"] svg,
+div[class*="st-key-field-help-"] button[kind="tertiary"] [data-testid="stIconMaterial"] {
+    display: none;
+}
+
+div[class*="st-key-field-help-"] button[kind="tertiary"]:hover,
+div[class*="st-key-field-help-"] button[kind="tertiary"]:focus-visible {
+    filter: brightness(0.96);
+}
+
+div[class*="st-key-field-help-"][class*="-lbl-blue"] button { background: #a4b8d3; }
+div[class*="st-key-field-help-"][class*="-lbl-lilac"] button { background: #bdb1cf; }
+div[class*="st-key-field-help-"][class*="-lbl-orange"] button { background: #e2bf9f; }
+div[class*="st-key-field-help-"][class*="-lbl-salmon"] button { background: #dbb0a3; }
+div[class*="st-key-field-help-"][class*="-lbl-beige"] button { background: #e2d2c4; }
+div[class*="st-key-field-help-"][class*="-lbl-green"] button { background: #bcccab; }
+div[class*="st-key-field-help-"][class*="-lbl-yellow"] button { background: #e8dda0; }
+div[class*="st-key-field-help-"][class*="-lbl-cyan"] button { background: #a6ced8; }
+div[class*="st-key-field-help-"][class*="-lbl-purple"] button { background: #b9adc9; }
+div[class*="st-key-field-help-"][class*="-lbl-steel"] button { background: #9cafc7; }
+div[class*="st-key-field-help-"][class*="-lbl-orange-soft"] button {
+    background: #ecdbc8;
+    color: #5c4837;
+}
+
+div[class*="st-key-field-help-"][class*="-is-important"] button {
+    border-color: #b55e34;
+    box-shadow: inset 3px 0 0 #b55e34;
+}
+
 .desc-box {
     background: #f6f8fb;
     border: 1px solid #7f8a98;
@@ -92,15 +147,20 @@ input[aria-label="URL de imágenes"],
 input[aria-label="Precio"],
 div[role="combobox"][aria-label="Edición"],
 div[role="combobox"][aria-label="Plantilla de envío"] {
-    background: #cc0f1f !important;
-    border-color: #8f0a16 !important;
-    color: #ffffff !important;
+    background: #fff1e8 !important;
+    border-color: #c66a3d !important;
+    color: #41291d !important;
+    box-shadow: inset 3px 0 0 #c66a3d;
 }
 
 div[role="combobox"][aria-label="Edición"] *,
-div[role="combobox"][aria-label="Plantilla de envío"] *,
-div[data-testid="stNumberInput"] button {
-    color: #ffffff !important;
+div[role="combobox"][aria-label="Plantilla de envío"] * {
+    color: #41291d !important;
+}
+
+.access-label.is-important {
+    border-color: #b55e34;
+    box-shadow: inset 3px 0 0 #b55e34;
 }
 
 div[data-testid="stForm"] button[kind="primary"] {

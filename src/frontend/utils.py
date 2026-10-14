@@ -14,6 +14,25 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     from project_meta import get_app_meta
 
+try:
+    from src.llm_models import (
+        DEFAULT_OPENAI_CATALOG_MODEL,
+        DEFAULT_OPENAI_OCR_MODEL,
+        OPENAI_CATALOG_MODEL_OPTIONS,
+        OPENAI_OCR_MODEL_OPTIONS,
+        openai_model_label,
+        openai_ocr_model_label,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    from llm_models import (
+        DEFAULT_OPENAI_CATALOG_MODEL,
+        DEFAULT_OPENAI_OCR_MODEL,
+        OPENAI_CATALOG_MODEL_OPTIONS,
+        OPENAI_OCR_MODEL_OPTIONS,
+        openai_model_label,
+        openai_ocr_model_label,
+    )
+
 API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 APP_META = get_app_meta()
 WORKFLOW_STAGES = ("ocr", "metadata", "catalog")
@@ -71,7 +90,7 @@ LONG_TIMEOUT_SECONDS = _as_float(os.getenv("API_LONG_TIMEOUT_SECONDS"), 900.0)
 
 OCR_PROVIDER_DEFAULT = _normalize_provider(os.getenv("OCR_PROVIDER"), fallback="ollama")
 OCR_OPENAI_MODEL_DEFAULT = str(
-    os.getenv("OCR_OPENAI_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+    os.getenv("OCR_OPENAI_MODEL", DEFAULT_OPENAI_OCR_MODEL) or DEFAULT_OPENAI_OCR_MODEL
 ).strip()
 OCR_OLLAMA_MODEL_DEFAULT = str(
     os.getenv("OCR_OLLAMA_MODEL", "glm-ocr:latest") or "glm-ocr:latest"
@@ -84,7 +103,8 @@ CATALOG_PROVIDER_DEFAULT = _normalize_provider(
     os.getenv("CATALOG_PROVIDER"), fallback="ollama"
 )
 CATALOG_MODEL_DEFAULT = str(
-    os.getenv("CATALOG_MODEL", "gpt-4o-mini") or "gpt-4o-mini"
+    os.getenv("CATALOG_MODEL", DEFAULT_OPENAI_CATALOG_MODEL)
+    or DEFAULT_OPENAI_CATALOG_MODEL
 ).strip()
 CATALOG_OPENAI_MODEL_DEFAULT = str(
     os.getenv("CATALOG_OPENAI_MODEL", CATALOG_MODEL_DEFAULT) or CATALOG_MODEL_DEFAULT
@@ -168,7 +188,7 @@ def _apply_theme() -> None:
         st.session_state[THEME_APPLIED_KEY] = True
 
 
-def configure_page(title: str = "Media Catalog Books") -> None:
+def configure_page(title: str = "MC Books") -> None:
     page_icon = str(APP_ICON_PATH) if APP_ICON_PATH.exists() else None
     try:
         if page_icon:
@@ -198,6 +218,22 @@ def configure_page(title: str = "Media Catalog Books") -> None:
         st.sidebar.warning("Actualización revertida; se conserva la versión anterior")
     elif status in {"skipped", "unavailable"}:
         st.sidebar.caption("Actualización automática omitida")
+
+
+def render_page_header(*, phase: str, title: str, description: str) -> None:
+    phase_text = html.escape(str(phase).strip())
+    title_text = html.escape(str(title).strip())
+    description_text = html.escape(str(description).strip())
+    st.markdown(
+        (
+            "<header class='mc-page-header'>"
+            f"<div class='mc-page-eyebrow'>Fase {phase_text}</div>"
+            f"<h1>{title_text}</h1>"
+            f"<p>{description_text}</p>"
+            "</header>"
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def _url(path: str) -> str:
@@ -260,7 +296,15 @@ def show_backend_status() -> None:
     for attempt in range(12):
         try:
             api_get("/health", timeout=3.0)
-            st.success(f"Backend activo: {API_URL}")
+            st.markdown(
+                (
+                    "<div class='mc-backend-status is-online'>"
+                    "<span class='mc-status-dot' aria-hidden='true'></span>"
+                    f"Servicio conectado · {html.escape(API_URL)}"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
             return
         except Exception as exc:
             last_exc = exc
@@ -371,36 +415,44 @@ def select_module_scope(
 ) -> tuple[str, str | None]:
     current_block, current_module = get_selected_scope()
 
-    st.caption(title)
-    col_block, col_module = st.columns([1, 1])
-    with col_block:
-        block = st.selectbox(
-            "Bloque",
-            BLOCK_OPTIONS,
-            index=BLOCK_OPTIONS.index(current_block),
-            key=f"{key_prefix}_block",
+    with st.container(border=True):
+        st.markdown(
+            f"<div class='mc-section-label'>{html.escape(title)}</div>",
+            unsafe_allow_html=True,
         )
-
-    available_modules = list_existing_modules(block)
-
-    with col_module:
-        if available_modules:
-            default_module = (
-                current_module
-                if current_module in available_modules
-                else available_modules[0]
+        col_block, col_module = st.columns([1, 1])
+        with col_block:
+            block = st.selectbox(
+                "Bloque",
+                BLOCK_OPTIONS,
+                index=BLOCK_OPTIONS.index(current_block),
+                key=f"{key_prefix}_block",
             )
-            module = st.selectbox(
-                "Módulo",
-                available_modules,
-                index=available_modules.index(default_module),
-                key=f"{key_prefix}_module",
-            )
-        else:
-            module = None
-            st.caption("Sin módulos disponibles")
 
-    selected_block, selected_module = set_selected_scope(block, module)
+        available_modules = list_existing_modules(block)
+
+        with col_module:
+            if available_modules:
+                default_module = (
+                    current_module
+                    if current_module in available_modules
+                    else available_modules[0]
+                )
+                module = st.selectbox(
+                    "Módulo",
+                    available_modules,
+                    index=available_modules.index(default_module),
+                    key=f"{key_prefix}_module",
+                )
+            else:
+                module = None
+                st.caption("Sin módulos disponibles")
+
+        selected_block, selected_module = set_selected_scope(block, module)
+        if selected_module:
+            st.caption(
+                f"Selección activa: bloque {selected_block} · módulo {selected_module}"
+            )
 
     if not selected_module:
         st.warning(
@@ -427,11 +479,20 @@ def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
             or "(sin título)"
         )
         stage = str(row.get("pipeline_stage") or "unknown")
+        stage_label = {
+            "ocr": "OCR",
+            "metadata": "Metadatos",
+            "catalog": "Catalogación",
+            "cover": "Portada",
+            "review": "Revisión",
+            "done": "Completado",
+            "running": "En ejecución",
+        }.get(stage, stage)
         review = " | revisión" if bool(row.get("workflow_needs_review")) else ""
         block = str(row.get("block") or "").strip()
         module = str(row.get("module") or "").strip()
         scope = f"{block}/{module}" if block and module else "--"
-        labels[book_id] = f"{book_id} | {scope} | {title} | {stage}{review}"
+        labels[book_id] = f"{book_id} | {scope} | {title} | {stage_label}{review}"
 
     preferred = get_selected_book_id()
     index = ids.index(preferred) if preferred in ids else 0
@@ -444,6 +505,73 @@ def select_book_id(rows: list[dict[str, Any]], *, label: str, key: str) -> str:
     )
     set_selected_book_id(selected)
     return selected
+
+
+def render_openai_catalog_model_selector(
+    *,
+    label: str,
+    key: str,
+    default_model: str,
+    disabled: bool = False,
+) -> str:
+    options = list(OPENAI_CATALOG_MODEL_OPTIONS)
+    default_text = str(default_model or DEFAULT_OPENAI_CATALOG_MODEL).strip()
+    if default_text and default_text not in options:
+        options.append(default_text)
+
+    preferred = default_text if default_text in options else options[0]
+    seed_widget_once(key, preferred)
+    if str(st.session_state.get(key) or "").strip() not in options:
+        st.session_state[key] = preferred
+
+    return str(
+        st.selectbox(
+            label,
+            options,
+            key=key,
+            disabled=disabled,
+            format_func=openai_model_label,
+            help=(
+                "Cada modelo aplica autom\u00e1ticamente su API y sus par\u00e1metros "
+                "compatibles de razonamiento, temperatura y salida estructurada."
+            ),
+        )
+        or ""
+    ).strip()
+
+
+def render_openai_ocr_model_selector(
+    *,
+    label: str,
+    key: str,
+    default_model: str,
+    disabled: bool = False,
+) -> str:
+    options = list(OPENAI_OCR_MODEL_OPTIONS)
+    default_text = str(default_model or DEFAULT_OPENAI_OCR_MODEL).strip()
+    if default_text and default_text not in options:
+        options.append(default_text)
+
+    preferred = default_text if default_text in options else options[0]
+    seed_widget_once(key, preferred)
+    if str(st.session_state.get(key) or "").strip() not in options:
+        st.session_state[key] = preferred
+
+    return str(
+        st.selectbox(
+            label,
+            options,
+            key=key,
+            disabled=disabled,
+            format_func=openai_ocr_model_label,
+            help=(
+                "Luna usa Responses API con razonamiento bajo y detalle original "
+                "para conservar el texto pequeño. El OCR local sigue siendo la "
+                "opción predeterminada de la aplicación."
+            ),
+        )
+        or ""
+    ).strip()
 
 
 @st.cache_data(ttl=30)

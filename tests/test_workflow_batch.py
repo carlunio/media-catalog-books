@@ -196,3 +196,152 @@ def test_cover_batch_selects_every_metadata_book_without_a_physical_file(
     ]
     assert result["requested"] == 2
     assert result["processed"] == 2
+
+
+def test_review_retry_propagates_the_selected_execution_options(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        workflow,
+        "run_one",
+        lambda book_id, **kwargs: calls.append((book_id, kwargs))
+        or {"id": book_id, "status": "partial"},
+    )
+
+    result = workflow.review_action(
+        "01A0001",
+        action="retry_from_metadata",
+        stop_after="metadata",
+        download_cover_after_metadata=False,
+        max_attempts=5,
+        ocr_provider="openai",
+        ocr_model="ocr-model",
+        ocr_resize_to_1800=True,
+        catalog_provider="ollama",
+        catalog_model="catalog-model",
+    )
+
+    assert result == {"id": "01A0001", "status": "partial"}
+    assert calls == [
+        (
+            "01A0001",
+            {
+                "start_stage": "metadata",
+                "stop_after": "metadata",
+                "action": "retry_from_metadata",
+                "overwrite": True,
+                "download_cover_after_metadata": False,
+                "max_attempts": 5,
+                "ocr_provider": "openai",
+                "ocr_model": "ocr-model",
+                "ocr_resize_to_1800": True,
+                "catalog_provider": "ollama",
+                "catalog_model": "catalog-model",
+            },
+        )
+    ]
+
+
+def test_batch_stop_request_finishes_current_item_and_skips_remaining_work(
+    monkeypatch,
+):
+    calls = []
+    progress = []
+
+    monkeypatch.setattr(
+        workflow.books,
+        "resolve_scope",
+        lambda block, module, require: ("A", "01"),
+    )
+    monkeypatch.setattr(
+        workflow.books,
+        "book_ids_for_workflow",
+        lambda **kwargs: ["01A0001", "01A0002", "01A0003"],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_one",
+        lambda book_id, **kwargs: calls.append(book_id)
+        or {"id": book_id, "status": "partial"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_cover_batch",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("cover sweep must not start after a stop request")
+        ),
+    )
+
+    result = workflow.run_batch(
+        block="A",
+        module="01",
+        limit=3,
+        start_stage="ocr",
+        download_cover_after_metadata=True,
+        stop_requested=lambda: len(calls) >= 1,
+        progress_callback=lambda phase, processed, requested, last_item: progress.append(
+            (phase, processed, requested, last_item)
+        ),
+    )
+
+    assert calls == ["01A0001"]
+    assert result["requested"] == 3
+    assert result["processed"] == 1
+    assert result["stopped"] is True
+    assert result["cover_sweep"] is None
+    assert progress == [
+        ("workflow", 0, 3, None),
+        (
+            "workflow",
+            0,
+            3,
+            {"id": "01A0001", "status": "running"},
+        ),
+        (
+            "workflow",
+            1,
+            3,
+            {"id": "01A0001", "status": "partial"},
+        ),
+    ]
+
+
+def test_batch_continues_with_next_id_after_ocr_timeout_review(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        workflow.books,
+        "resolve_scope",
+        lambda block, module, require: ("A", "01"),
+    )
+    monkeypatch.setattr(
+        workflow.books,
+        "book_ids_for_workflow",
+        lambda **kwargs: ["01A0001", "01A0002"],
+    )
+
+    def fake_run_one(book_id, **kwargs):
+        calls.append(book_id)
+        if book_id == "01A0001":
+            return {
+                "id": book_id,
+                "status": "review",
+                "workflow_review_reason": "ocr_timeout",
+            }
+        return {"id": book_id, "status": "partial"}
+
+    monkeypatch.setattr(workflow, "run_one", fake_run_one)
+
+    result = workflow.run_batch(
+        block="A",
+        module="01",
+        limit=2,
+        start_stage="ocr",
+        stop_after="ocr",
+        download_cover_after_metadata=False,
+    )
+
+    assert calls == ["01A0001", "01A0002"]
+    assert result["processed"] == 2
+    assert result["items"][0]["status"] == "review"
+    assert result["items"][1]["id"] == "01A0002"

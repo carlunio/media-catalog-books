@@ -11,13 +11,21 @@ from ..clients import (
     ClientTimeoutError,
     ollama_chat_text,
     ollama_chat_with_images,
+    openai_text_chat,
+    openai_vision_chat,
 )
-from ..config import OCR_ISBN_OLLAMA_MODEL, OCR_OLLAMA_MODEL
+from ..config import (
+    OCR_ISBN_OLLAMA_MODEL,
+    OCR_OLLAMA_MODEL,
+    OCR_OPENAI_MODEL,
+    OCR_TIMEOUT_SECONDS,
+    OPENAI_API_KEY,
+)
 from ..normalizers import clean_isbn, is_valid_isbn
 from . import books
 
 OCR_TEXT_PROMPT = (
-    "Transcribe absolutamente todo el texto que veas"
+    "Transcribe absolutamente todo el texto que veas. "
     "Respeta los saltos de línea. "
     "No inventes texto ni añadas comentarios."
 )
@@ -155,7 +163,13 @@ def _isbn_candidate_details(candidates: list[str]) -> list[dict[str, Any]]:
     return [_isbn_candidate_detail(value) for value in candidates]
 
 
-def _ollama_chat_with_image(*, model: str, image_path: Path, prompt: str) -> str:
+def _ollama_chat_with_image(
+    *,
+    model: str,
+    image_path: Path,
+    prompt: str,
+    timeout: float = OCR_TIMEOUT_SECONDS,
+) -> str:
     if not image_path.exists() or not image_path.is_file():
         raise ClientError(f"Image path not found: {image_path}")
 
@@ -168,6 +182,46 @@ def _ollama_chat_with_image(*, model: str, image_path: Path, prompt: str) -> str
         model=model,
         prompt=prompt,
         images_base64=[encoded_image],
+        timeout=timeout,
+    )
+
+
+def _openai_chat_with_image(
+    *,
+    model: str,
+    image_path: Path,
+    prompt: str,
+    timeout: float = OCR_TIMEOUT_SECONDS,
+) -> str:
+    if not OPENAI_API_KEY:
+        raise ClientError("OPENAI_API_KEY is not configured for OCR provider openai")
+    if not image_path.exists() or not image_path.is_file():
+        raise ClientError(f"Image path not found: {image_path}")
+
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }
+    mime_type = mime_types.get(image_path.suffix.lower())
+    if mime_type is None:
+        raise ClientError(
+            f"Unsupported OpenAI OCR image format: {image_path.suffix or '(none)'}"
+        )
+
+    try:
+        encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    except OSError as exc:
+        raise ClientError(f"Could not read image {image_path}: {exc}") from exc
+
+    return openai_vision_chat(
+        api_key=OPENAI_API_KEY,
+        model=model,
+        prompt=prompt,
+        image_data_url=f"data:{mime_type};base64,{encoded_image}",
+        timeout=timeout,
     )
 
 
@@ -274,9 +328,11 @@ def _prepare_image_for_ocr(
 
 def _run_ocr_for_image(
     *,
+    provider: str = "ollama",
     model: str,
     image_path: Path,
     resize_to_1800: bool = False,
+    timeout: float = OCR_TIMEOUT_SECONDS,
 ) -> tuple[str, dict[str, Any]]:
     prepared_path, preprocess, temp_path = _prepare_image_for_ocr(
         model=model,
@@ -285,9 +341,22 @@ def _run_ocr_for_image(
     )
 
     try:
-        text = _ollama_chat_with_image(
-            model=model, image_path=prepared_path, prompt=OCR_TEXT_PROMPT
-        )
+        if provider == "openai":
+            text = _openai_chat_with_image(
+                model=model,
+                image_path=prepared_path,
+                prompt=OCR_TEXT_PROMPT,
+                timeout=timeout,
+            )
+        elif provider == "ollama":
+            text = _ollama_chat_with_image(
+                model=model,
+                image_path=prepared_path,
+                prompt=OCR_TEXT_PROMPT,
+                timeout=timeout,
+            )
+        else:
+            raise ClientError(f"Unsupported OCR provider: {provider}")
     finally:
         if temp_path is not None and temp_path.exists():
             try:
@@ -301,7 +370,13 @@ def _run_ocr_for_image(
     return cleaned, preprocess
 
 
-def _extract_isbn_with_llm(credits_text: str, *, model: str) -> dict[str, Any]:
+def _extract_isbn_with_llm(
+    credits_text: str,
+    *,
+    provider: str = "ollama",
+    model: str,
+    timeout: float = OCR_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     text = str(credits_text or "").strip()
     if not text:
         return {
@@ -316,10 +391,26 @@ def _extract_isbn_with_llm(credits_text: str, *, model: str) -> dict[str, Any]:
             "source": "empty_ocr_text",
         }
 
-    raw = ollama_chat_text(
-        model=model,
-        prompt=f"{ISBN_PROMPT}\n\nTEXTO:\n{text}",
-    )
+    prompt = f"{ISBN_PROMPT}\n\nTEXTO:\n{text}"
+    if provider == "openai":
+        if not OPENAI_API_KEY:
+            raise ClientError(
+                "OPENAI_API_KEY is not configured for OCR provider openai"
+            )
+        raw = openai_text_chat(
+            api_key=OPENAI_API_KEY,
+            model=model,
+            prompt=prompt,
+            timeout=timeout,
+        )
+    elif provider == "ollama":
+        raw = ollama_chat_text(
+            model=model,
+            prompt=prompt,
+            timeout=timeout,
+        )
+    else:
+        raise ClientError(f"Unsupported OCR provider: {provider}")
     normalized = _normalize_ocular_isbn_confusions(raw)
     candidates = _clean_isbn_candidates(normalized)
     candidate_details = _isbn_candidate_details(candidates)
@@ -346,14 +437,16 @@ def _ocr_with_model(
     model: str,
     image_paths: list[Path],
     *,
+    provider: str = "ollama",
     resize_to_1800: bool = False,
+    timeout: float = OCR_TIMEOUT_SECONDS,
 ) -> tuple[str, list[dict[str, Any]]]:
     traces: list[dict[str, Any]] = []
     chunks: list[str] = []
 
     for index, path in enumerate(image_paths[:4], start=1):
         attempt: dict[str, Any] = {
-            "provider": "ollama",
+            "provider": provider,
             "model": model,
             "image": str(path),
             "index": index,
@@ -361,9 +454,11 @@ def _ocr_with_model(
 
         try:
             text, preprocess = _run_ocr_for_image(
+                provider=provider,
                 model=model,
                 image_path=path,
                 resize_to_1800=resize_to_1800,
+                timeout=timeout,
             )
             attempt["preprocess"] = preprocess
             if text:
@@ -377,6 +472,7 @@ def _ocr_with_model(
                 attempt["error"] = "Provider returned empty OCR text"
         except ClientTimeoutError as exc:
             attempt["status"] = "error"
+            attempt["error_code"] = "ocr_timeout"
             attempt["chars"] = 0
             attempt["error"] = str(exc)
             traces.append(attempt)
@@ -501,6 +597,7 @@ def run_one(
     model: str | None = None,
     resize_to_1800: bool = False,
     overwrite: bool = False,
+    timeout: float = OCR_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     book = books.get_book(book_id)
     if book is None:
@@ -541,17 +638,56 @@ def run_one(
         return {"id": book_id, "status": "error", "error": "No image file available"}
 
     requested_provider = str(provider or "ollama").strip().lower() or "ollama"
-    selected_model = str(model or OCR_OLLAMA_MODEL).strip() or OCR_OLLAMA_MODEL
-    selected_isbn_model = str(OCR_ISBN_OLLAMA_MODEL).strip() or "gpt-oss:20b"
+    if requested_provider not in {"ollama", "openai"}:
+        return {
+            "id": book_id,
+            "status": "error",
+            "error": f"Unsupported OCR provider: {requested_provider}",
+        }
+
+    if requested_provider == "openai":
+        selected_model = str(model or OCR_OPENAI_MODEL).strip() or OCR_OPENAI_MODEL
+        selected_isbn_model = selected_model
+    else:
+        selected_model = str(model or OCR_OLLAMA_MODEL).strip() or OCR_OLLAMA_MODEL
+        selected_isbn_model = str(OCR_ISBN_OLLAMA_MODEL).strip() or "gpt-oss:20b"
 
     credits_text, traces = _ocr_with_model(
         selected_model,
         image_paths,
+        provider=requested_provider,
         resize_to_1800=bool(resize_to_1800),
+        timeout=max(1.0, float(timeout)),
     )
 
     if not credits_text:
-        message = "All OCR provider attempts failed"
+        timed_out_attempt = next(
+            (
+                attempt
+                for attempt in traces
+                if str(attempt.get("error_code") or "") == "ocr_timeout"
+            ),
+            None,
+        )
+        timed_out = timed_out_attempt is not None
+        timeout_image = (
+            Path(str(timed_out_attempt.get("image") or "")).name
+            if timed_out_attempt
+            else ""
+        )
+        timeout_seconds = max(1.0, float(timeout))
+        if timed_out:
+            readable_timeout = (
+                str(int(timeout_seconds))
+                if timeout_seconds.is_integer()
+                else str(timeout_seconds)
+            )
+            message = (
+                "El OCR superó el límite de "
+                f"{readable_timeout} segundos para una imagen."
+            )
+        else:
+            message = "All OCR provider attempts failed"
         for attempt in traces:
             detail = str(attempt.get("error") or "").strip()
             if detail:
@@ -562,13 +698,15 @@ def run_one(
         trace_payload = {
             "source": "provider",
             "provider_requested": requested_provider,
-            "provider": "ollama",
+            "provider": requested_provider,
             "model": selected_model,
             "resize_to_1800_requested": bool(resize_to_1800),
             "resize_to_1800_applied": bool(
                 resize_to_1800 and _is_glm_ocr_model(selected_model)
             ),
             "ocr_attempts": compact_attempts,
+            "error_code": "ocr_timeout" if timed_out else None,
+            "timeout_seconds_per_image": timeout_seconds,
         }
 
         books.update_ocr(
@@ -577,17 +715,40 @@ def run_one(
             isbn_raw=None,
             isbn=None,
             status="error",
-            provider="ollama",
+            provider=requested_provider,
             model=selected_model,
             trace=trace_payload,
             error=message,
         )
-        return {"id": book_id, "status": "error", "error": message, "trace": traces}
+        result = {
+            "id": book_id,
+            "status": "error",
+            "error": message,
+            "trace": traces,
+        }
+        if timed_out:
+            result["error_code"] = "ocr_timeout"
+            if timeout_image:
+                result["timeout_image"] = timeout_image
+                image_description = f"la imagen «{timeout_image}»"
+            else:
+                image_description = "una imagen"
+            result["review_reason"] = (
+                f"ocr_timeout: {image_description} superó "
+                f"{readable_timeout} segundos. Recorta manualmente la fotografía "
+                "para eliminar texto borroso de otras páginas y vuelve a ejecutar OCR."
+            )
+        return result
 
     isbn_data: dict[str, Any]
     isbn_error: str | None = None
     try:
-        isbn_data = _extract_isbn_with_llm(credits_text, model=selected_isbn_model)
+        isbn_data = _extract_isbn_with_llm(
+            credits_text,
+            provider=requested_provider,
+            model=selected_isbn_model,
+            timeout=max(1.0, float(timeout)),
+        )
     except Exception as exc:
         isbn_error = str(exc)
         fallback = derive_isbn_from_text(credits_text)
@@ -608,7 +769,7 @@ def run_one(
 
     compact_attempts = _compact_ocr_attempts(traces)
     compact_isbn = _compact_isbn_extraction(
-        provider="ollama",
+        provider=requested_provider,
         model=selected_isbn_model,
         isbn_data=isbn_data,
         isbn_error=isbn_error,
@@ -616,7 +777,7 @@ def run_one(
     trace_payload = {
         "source": "provider",
         "provider_requested": requested_provider,
-        "provider": "ollama",
+        "provider": requested_provider,
         "model": selected_model,
         "resize_to_1800_requested": bool(resize_to_1800),
         "resize_to_1800_applied": bool(
@@ -632,7 +793,7 @@ def run_one(
         isbn_raw=isbn_raw_value,
         isbn=isbn_value,
         status="processed",
-        provider="ollama",
+        provider=requested_provider,
         model=selected_model,
         trace=trace_payload,
         error=None,
@@ -643,7 +804,7 @@ def run_one(
         "status": "processed",
         "isbn": isbn_value,
         "isbn_raw": isbn_raw_value,
-        "provider": "ollama",
+        "provider": requested_provider,
         "model": selected_model,
         "isbn_model": selected_isbn_model,
         "resize_to_1800_requested": bool(resize_to_1800),

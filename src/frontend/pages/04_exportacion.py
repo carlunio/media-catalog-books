@@ -9,6 +9,7 @@ try:
         api_get,
         api_get_bytes,
         configure_page,
+        render_page_header,
         get_selected_scope,
         list_existing_modules,
         set_selected_scope,
@@ -20,18 +21,29 @@ except ModuleNotFoundError:  # pragma: no cover
         api_get,
         api_get_bytes,
         configure_page,
+        render_page_header,
         get_selected_scope,
         list_existing_modules,
         set_selected_scope,
         show_backend_status,
     )
 
-configure_page("Exportación | Media Catalog Books")
+configure_page("Exportación | MC Books")
 
-st.title("Fase 4 · Exportación")
+render_page_header(
+    phase="4",
+    title="Exportación",
+    description=(
+        "Revisa el resultado y genera el TXT tabulado con cabecera para AbeBooks."
+    ),
+)
 show_backend_status()
 
-st.write("Exporta la vista `libros_carga_abebooks` en TXT tabulado (TAB + cabecera).")
+st.subheader("Preparar exportación")
+st.caption(
+    "Selecciona uno o varios módulos y comprueba la vista previa antes de "
+    "generar el archivo."
+)
 
 current_block, current_module = get_selected_scope()
 block = st.selectbox(
@@ -58,7 +70,7 @@ if available_modules:
             st.session_state[modules_key] = filtered_values
 
     selected_modules = st.multiselect(
-        "Modulos", options=available_modules, key=modules_key
+        "Módulos", options=available_modules, key=modules_key
     )
 else:
     selected_modules = []
@@ -86,54 +98,7 @@ encoding = st.selectbox(
     key="export_encoding_selector",
 )
 
-export_disabled = not prefixes
-if st.button("Exportar TXT", type="primary", disabled=export_disabled):
-    params = {
-        "block": block,
-        "modules": ",".join(selected_modules),
-        "encoding": encoding,
-    }
-    try:
-        result = api_get("/export/books/txt", params=params, timeout=180.0)
-        path = Path(str(result.get("path") or "data/output/exports/books.txt"))
-        filename = str(result.get("filename") or path.name)
-        rows = int(result.get("rows") or 0)
-        used_encoding = str(result.get("encoding") or encoding)
-        st.success(f"Exportado en servidor: {path} ({rows} filas, {used_encoding})")
-
-        try:
-            file_bytes = api_get_bytes(
-                "/export/books/file", params={"filename": filename}, timeout=180.0
-            )
-            st.session_state["export_last_file_bytes"] = file_bytes
-            st.session_state["export_last_file_name"] = filename
-            st.session_state["export_last_file_mime"] = "text/plain"
-        except Exception as exc:
-            st.session_state.pop("export_last_file_bytes", None)
-            st.session_state.pop("export_last_file_name", None)
-            st.session_state.pop("export_last_file_mime", None)
-            st.warning(
-                f"El fichero se guardó en el servidor, pero no se pudo preparar la descarga: {exc}"
-            )
-
-        if path.exists():
-            st.caption(f"Tamaño: {path.stat().st_size} bytes")
-    except Exception as exc:
-        st.error(f"Error exportando TXT: {exc}")
-
-download_bytes = st.session_state.get("export_last_file_bytes")
-download_name = st.session_state.get("export_last_file_name")
-download_mime = st.session_state.get("export_last_file_mime", "text/plain")
-if isinstance(download_bytes, (bytes, bytearray)) and str(download_name or "").strip():
-    st.download_button(
-        "Descargar TXT en este equipo",
-        data=bytes(download_bytes),
-        file_name=str(download_name),
-        mime=str(download_mime),
-        key="export_download_button",
-    )
-
-st.subheader("Vista previa de la exportación")
+st.subheader("Vista previa")
 preview_limit = st.number_input(
     "Filas máximas", min_value=10, max_value=5000, value=300, step=10
 )
@@ -175,3 +140,66 @@ if prefixes:
             st.info("No hay datos para la selección actual.")
     except Exception as exc:
         st.error(f"No se pudo cargar la vista previa: {exc}")
+
+st.divider()
+st.subheader("Generar archivo")
+st.caption(
+    "La codificación Windows-1252 se mantiene para la carga en AbeBooks; "
+    "UTF-8 queda disponible para otros usos."
+)
+export_disabled = not prefixes
+if st.button(
+    "Generar TXT",
+    type="primary",
+    icon=":material/download:",
+    disabled=export_disabled,
+    width="stretch",
+):
+    params = {
+        "block": block,
+        "modules": ",".join(selected_modules),
+        "encoding": encoding,
+    }
+    try:
+        with st.spinner("Generando el archivo de exportación…"):
+            result = api_get("/export/books/txt", params=params, timeout=180.0)
+        path = Path(str(result.get("path") or "data/output/exports/books.txt"))
+        filename = str(result.get("filename") or path.name)
+        rows = int(result.get("rows") or 0)
+        used_encoding = str(result.get("encoding") or encoding)
+        st.success(f"Exportado en servidor: {path} ({rows} filas, {used_encoding})")
+
+        try:
+            with st.spinner("Preparando la descarga…"):
+                file_bytes = api_get_bytes(
+                    "/export/books/file",
+                    params={"filename": filename},
+                    timeout=180.0,
+                )
+            st.session_state["export_last_file_bytes"] = file_bytes
+            st.session_state["export_last_file_name"] = filename
+            st.session_state["export_last_file_mime"] = "text/plain"
+        except Exception as exc:
+            st.session_state.pop("export_last_file_bytes", None)
+            st.session_state.pop("export_last_file_name", None)
+            st.session_state.pop("export_last_file_mime", None)
+            st.warning(
+                f"El fichero se guardó en el servidor, pero no se pudo preparar la descarga: {exc}"
+            )
+
+        if path.exists():
+            st.caption(f"Tamaño: {path.stat().st_size} bytes")
+    except Exception as exc:
+        st.error(f"Error exportando TXT: {exc}")
+
+download_bytes = st.session_state.get("export_last_file_bytes")
+download_name = st.session_state.get("export_last_file_name")
+download_mime = st.session_state.get("export_last_file_mime", "text/plain")
+if isinstance(download_bytes, (bytes, bytearray)) and str(download_name or "").strip():
+    st.download_button(
+        "Descargar TXT en este equipo",
+        data=bytes(download_bytes),
+        file_name=str(download_name),
+        mime=str(download_mime),
+        key="export_download_button",
+    )

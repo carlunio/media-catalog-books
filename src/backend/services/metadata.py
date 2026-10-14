@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from ...project_meta import get_app_meta
 from ..config import (
     GOOGLE_BOOKS_API_KEY,
     GOOGLE_BOOKS_MIN_INTERVAL_SECONDS,
@@ -259,7 +260,7 @@ OPENLIBRARY_WORK_FIELDS = ",".join(
 
 
 def _open_library_headers() -> dict[str, str]:
-    user_agent = "media-catalog-books/1.0"
+    user_agent = f"MC-Books/{get_app_meta().version}"
     if OPENLIBRARY_CONTACT:
         user_agent = f"{user_agent} ({OPENLIBRARY_CONTACT})"
     return {"User-Agent": user_agent}

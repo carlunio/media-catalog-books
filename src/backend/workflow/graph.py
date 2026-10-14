@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -37,6 +38,7 @@ class WorkflowState(TypedDict, total=False):
     ocr_resize_to_1800: bool
     catalog_provider: str | None
     catalog_model: str | None
+    stop_requested: Callable[[], bool] | None
 
     max_attempts: int
 
@@ -69,6 +71,26 @@ def _resume_stage_from_pipeline_stage(value: Any) -> StageName | None:
 
 def _should_stop_after(state: WorkflowState, stage: StageName) -> bool:
     return state.get("stop_after") == stage
+
+
+def _stop_was_requested(state: WorkflowState) -> bool:
+    callback = state.get("stop_requested")
+    if callback is None:
+        return False
+    try:
+        return bool(callback())
+    except Exception:
+        return False
+
+
+def _stop_current_work(book_id: str) -> WorkflowState:
+    return {
+        "book": books.get_book(book_id),
+        "failed_step": None,
+        "error": None,
+        "stop_pipeline": True,
+        "outcome": "stopping",
+    }
 
 
 def _compose_running_action(
@@ -260,6 +282,9 @@ def _ocr_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     books.set_workflow_running(
         book_id,
         node="ocr",
@@ -278,10 +303,25 @@ def _ocr_node(state: WorkflowState) -> WorkflowState:
         resize_to_1800=bool(state.get("ocr_resize_to_1800")),
         overwrite=bool(state.get("overwrite")),
     )
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     if str(result.get("status") or "").strip().lower() == "error":
-        return _with_failure(
-            book_id, step="ocr", error=str(result.get("error") or "OCR failed")
-        )
+        error = str(result.get("error") or "OCR failed")
+        if str(result.get("error_code") or "") == "ocr_timeout":
+            reason = str(result.get("review_reason") or error)
+            books.set_workflow_review(
+                book_id,
+                node="ocr_timeout",
+                reason=reason,
+                error=error,
+            )
+            return {
+                "book": books.get_book(book_id),
+                "stop_pipeline": True,
+                "outcome": "review",
+            }
+        return _with_failure(book_id, step="ocr", error=error)
 
     refreshed = books.get_book(book_id)
     if _should_route_to_ocr_review(refreshed):
@@ -316,6 +356,9 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     books.set_workflow_running(
         book_id,
         node="metadata",
@@ -323,6 +366,9 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
     )
 
     result = metadata.run_one(book_id, overwrite=bool(state.get("overwrite")))
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     if str(result.get("status") or "").strip().lower() == "error":
         return _with_failure(
             book_id,
@@ -352,6 +398,8 @@ def _metadata_node(state: WorkflowState) -> WorkflowState:
             except Exception:
                 pass
         refreshed = books.get_book(book_id)
+        if _stop_was_requested(state):
+            return _stop_current_work(book_id)
 
     if _should_stop_after(state, "metadata"):
         return {
@@ -371,6 +419,9 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
         return {}
 
     book_id = state["book_id"]
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     books.set_workflow_running(
         book_id,
         node="catalog",
@@ -388,6 +439,9 @@ def _catalog_node(state: WorkflowState) -> WorkflowState:
         provider=state.get("catalog_provider"),
         model=state.get("catalog_model"),
     )
+    if _stop_was_requested(state):
+        return _stop_current_work(book_id)
+
     if str(result.get("status") or "").strip().lower() == "error":
         return _with_failure(
             book_id,
@@ -444,7 +498,13 @@ def _evaluate_node(state: WorkflowState) -> WorkflowState:
 
     if state.get("stop_pipeline"):
         stop_after = state.get("stop_after")
-        if stop_after:
+        if state.get("outcome") == "stopping":
+            books.set_workflow_pending(
+                book_id,
+                node="stopped",
+                reason="Stopped by user",
+            )
+        elif stop_after:
             books.set_workflow_pending(
                 book_id,
                 node=f"stage:{stop_after}",

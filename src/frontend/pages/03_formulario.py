@@ -6,6 +6,7 @@ import streamlit as st
 
 try:
     from src.catalog_form_fields import (
+        FORM_FIELD_HELP,
         IMPORTANT_FIELDS,
         READ_ONLY_FIELDS,
         SELECTABLE_FIELDS,
@@ -17,6 +18,7 @@ try:
         api_post,
         api_put,
         configure_page,
+        render_page_header,
         get_selected_book_id,
         scope_params,
         select_module_scope,
@@ -25,6 +27,7 @@ try:
     )
 except ModuleNotFoundError:  # pragma: no cover
     from catalog_form_fields import (
+        FORM_FIELD_HELP,
         IMPORTANT_FIELDS,
         READ_ONLY_FIELDS,
         SELECTABLE_FIELDS,
@@ -36,6 +39,7 @@ except ModuleNotFoundError:  # pragma: no cover
         api_post,
         api_put,
         configure_page,
+        render_page_header,
         get_selected_book_id,
         scope_params,
         select_module_scope,
@@ -43,8 +47,7 @@ except ModuleNotFoundError:  # pragma: no cover
         show_backend_status,
     )
 
-configure_page("Formulario | Media Catalog Books")
-show_backend_status()
+configure_page("Formulario | MC Books")
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 ACCESS_FORM_CSS_PATH = ASSETS_DIR / "catalog_form_access.css"
@@ -61,10 +64,15 @@ page_css = _load_page_css()
 if page_css:
     st.markdown(f"<style>{page_css}</style>", unsafe_allow_html=True)
 
-st.markdown(
-    "<div class='access-titlebar'>Formulario de catalogación</div>",
-    unsafe_allow_html=True,
+render_page_header(
+    phase="3",
+    title="Formulario de catalogación",
+    description=(
+        "Completa, guarda y consolida la ficha bibliográfica que se utilizará "
+        "en la exportación."
+    ),
 )
+show_backend_status()
 
 scope_block, scope_module = select_module_scope(
     key_prefix="core_catalog_scope", title="Módulo de trabajo"
@@ -72,20 +80,29 @@ scope_block, scope_module = select_module_scope(
 if not scope_module:
     st.stop()
 
+st.subheader("Seleccionar ficha")
+st.caption(
+    "Elige un libro del módulo. Los cambios del formulario se guardan "
+    "automáticamente mientras la ficha esté en borrador."
+)
+
 scope = scope_params(scope_block, scope_module)
 
-top_col_a, top_col_b = st.columns([1, 1])
-with top_col_a:
-    st.caption(f"Bloque {scope_block} · Módulo {scope_module}")
-with top_col_b:
-    if st.button("Sincronizar desde catalogación automática", width="stretch"):
+with st.expander("Mantenimiento de fichas antiguas", expanded=False):
+    st.caption(
+        "La fase de Catálogo crea las fichas automáticamente. Esta herramienta "
+        "recupera registros catalogados con versiones anteriores o importaciones "
+        "incompletas, sin sobrescribir campos ya rellenados."
+    )
+    if st.button("Recuperar fichas desde el catálogo", width="stretch"):
         try:
             result = api_post(
                 "/core-books/bootstrap", params={**scope, "limit": 5000}, timeout=90.0
             )
-            st.success(f"Registros sincronizados: {int(result.get('upserted') or 0)}")
+            recovered = int(result.get("upserted") or 0)
+            st.success(f"Registros recuperados: {recovered}")
         except Exception as exc:
-            st.error(f"No se pudo sincronizar: {exc}")
+            st.error(f"No se pudieron recuperar las fichas: {exc}")
 
 try:
     options_payload = api_get("/core-books/options", timeout=10.0)
@@ -330,14 +347,41 @@ def _field_options(field: str, current: str) -> list[str]:
     return options
 
 
+def _render_field_label(
+    container: Any,
+    label: str,
+    field: str,
+    css_class: str,
+) -> None:
+    help_text = FORM_FIELD_HELP.get(field)
+    if not help_text:
+        container.markdown(
+            f"<div class='access-label {css_class}'>{label}</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    style_key = "-".join(css_class.split())
+    with container.popover(
+        label,
+        type="tertiary",
+        width="stretch",
+        wrap=True,
+        key=f"field-help-{field}-{style_key}",
+    ):
+        st.markdown(help_text)
+
+
 def _render_field(label: str, field: str, *, left_col, right_col) -> None:
     current_value = str(
         st.session_state.get(_input_key(selected_id, field), "")
     ).strip()
     important_class = " is-important" if field in IMPORTANT_FIELDS else ""
-    left_col.markdown(
-        f"<div class='access-label {field_label_class(field)}{important_class}'>{label}</div>",
-        unsafe_allow_html=True,
+    _render_field_label(
+        left_col,
+        label,
+        field,
+        f"{field_label_class(field)}{important_class}",
     )
     key = _input_key(selected_id, field)
 
@@ -415,9 +459,11 @@ def _render_stacked_field(
 ) -> None:
     important_class = " is-important" if field in IMPORTANT_FIELDS else ""
     resolved_class = label_class or field_label_class(field)
-    container.markdown(
-        f"<div class='access-label {resolved_class}{important_class}'>{label}</div>",
-        unsafe_allow_html=True,
+    _render_field_label(
+        container,
+        label,
+        field,
+        f"{resolved_class}{important_class}",
     )
 
     current_value = str(
