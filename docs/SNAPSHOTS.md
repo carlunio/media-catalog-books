@@ -1,6 +1,6 @@
 # Instantáneas de DuckDB
 
-Las instantáneas permiten trasladar el estado completo de Media Catalog Books
+Las instantáneas permiten trasladar el estado completo de MC Books
 entre instalaciones. Cada publicación contiene un fichero DuckDB y un
 manifiesto JSON con origen, versión de la aplicación, versión de esquema,
 tamaño y suma SHA-256.
@@ -29,7 +29,7 @@ una base de otra aplicación o con migraciones desconocidas.
 1. Exige confirmación explícita y vuelve a comprobar el SHA-256 del original.
 2. Copia la instantánea a un archivo temporal junto a la base local.
 3. Comprueba que es una base DuckDB legible y contiene las relaciones propias
-   de Media Catalog Books.
+   de MC Books.
 4. Aplica a la copia todas las migraciones pendientes y valida otra vez el
    esquema.
 5. Crea una copia de seguridad de la base local en `data/backups/local`.

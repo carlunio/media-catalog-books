@@ -20,7 +20,9 @@ Solo se incluyen registros que ya tienen ficha en la tabla principal. Las
 referencias sin ficha todavía deben crearse o sincronizarse desde el formulario.
 
 La hoja **Fichas** contiene las mismas cabeceras y colores del formulario. Las
-dos primeras columnas identifican el registro y su estado. Las columnas grises
+columnas siguen los bloques lógicos de la ficha; dentro de las medidas aparecen
+juntas `Alto`, `Ancho` y `Fondo`, seguidas de `Peso`. Las dos primeras columnas
+identifican el registro y su estado. Las columnas grises
 son informativas; las blancas y rojas son editables. La descripción también es
 informativa porque se vuelve a generar al importar.
 
@@ -51,6 +53,10 @@ listas para que una ficha antigua no quede invalidada solo por mantener su valor
 actual.
 
 ## Formatos
+
+La guía completa de los campos con sintaxis, separadores o unidades especiales
+está en [`FORM_FIELDS.md`](FORM_FIELDS.md). Las cabeceras del Excel contienen
+también comentarios con esas indicaciones.
 
 Las referencias, los ISBN y los años se escriben como texto para evitar que
 Excel elimine ceros iniciales o use notación científica.

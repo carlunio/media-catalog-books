@@ -1,8 +1,12 @@
-# media-catalog-books
+# MC Books
 
 Aplicación para catalogar libros mediante un flujo por módulos (bloque +
 módulo), una API de backend, orquestación de etapas, revisión manual, formulario
 final y exportación tabulada para carga externa.
+
+El nombre comercial de la aplicación es **MC Books**. El paquete, el repositorio
+y algunas rutas internas conservan el identificador técnico
+`media-catalog-books` para mantener la compatibilidad de las instalaciones.
 
 ## Estado del proyecto
 
@@ -66,7 +70,9 @@ La política para evolucionar su esquema está documentada en
 
 El ciclo operativo `sin ficha -> borrador -> consolidada`, sus bloqueos y la
 reapertura explícita están documentados en
-[`docs/FORM_LIFECYCLE.md`](docs/FORM_LIFECYCLE.md).
+[`docs/FORM_LIFECYCLE.md`](docs/FORM_LIFECYCLE.md). Los formatos especiales de
+cada campo editable se recogen en
+[`docs/FORM_FIELDS.md`](docs/FORM_FIELDS.md).
 
 El contrato de las API bibliográficas, la separación entre obra y edición y la
 selección de portadas están documentados en
@@ -307,12 +313,13 @@ OCR:
 - `OCR_PROVIDER` (`ollama` u `openai`)
 - `OCR_OLLAMA_MODEL`
 - `OCR_OLLAMA_MODEL_SUGGESTIONS`
-- `OCR_OPENAI_MODEL`
+- `OCR_OPENAI_MODEL` (`gpt-6-luna` por defecto al elegir OpenAI)
 - `OCR_RESIZE_TO_1800_DEFAULT`
 - `OCR_ISBN_OLLAMA_MODEL`
 - `OCR_OLLAMA_FALLBACK_MODELS`
 - `OCR_USE_SIDECAR`
 - `OLLAMA_BASE_URL`
+- `OCR_TIMEOUT_SECONDS`
 - `LLM_TIMEOUT_SECONDS`
 - `OLLAMA_TIMEOUT_SECONDS`
 
@@ -326,6 +333,12 @@ Catalogación automática:
 - `CATALOG_ARBITER_ENABLED`
 - `CATALOG_ARBITER_PROVIDER`
 - `CATALOG_ARBITER_MIN_CONFIDENCE`
+
+Para OpenAI, el modelo de catálogo predeterminado es `gpt-6-luna` con
+razonamiento `low`; `gpt-6.1-sol` se puede elegir manualmente para fichas más
+complejas. Cada modelo disponible en la interfaz aplica su propio perfil de
+API, temperatura y salida estructurada; consulta
+[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#catalogación-con-openai).
 
 API y límites:
 
@@ -359,11 +372,26 @@ que sus listas de editoriales, fechas e ISBN no se interpreten como datos del
 ejemplar.
 
 Los lotes del flujo de trabajo no tienen un tiempo de espera global.
-`REQUEST_TIMEOUT_SECONDS`
-limita cada petición a una API bibliográfica y `LLM_TIMEOUT_SECONDS` limita
-cada llamada de OCR o catalogación. Ambos contadores empiezan de nuevo en cada
-operación y para cada libro. Si `OLLAMA_TIMEOUT_SECONDS` queda vacío, hereda el
-límite general de modelos.
+`REQUEST_TIMEOUT_SECONDS` limita cada petición a una API bibliográfica y
+`OCR_TIMEOUT_SECONDS` limita por separado cada imagen enviada al OCR (60
+segundos por defecto). El contador de OCR se reinicia con cada imagen. Si se
+agota, ese libro pasa directamente a Revisión con la causa `ocr_timeout` y el
+lote continúa con el ID siguiente. `LLM_TIMEOUT_SECONDS` limita las demás
+llamadas a modelos, como la catalogación y la extracción de ISBN.
+`OLLAMA_TIMEOUT_SECONDS`, si se configura, actúa como valor general de Ollama;
+las imágenes OCR usan siempre su límite específico.
+
+La ejecución iniciada desde Orquestación se mantiene en segundo plano. El botón
+`Detener`, situado junto a `Actualizar`, solicita una parada cooperativa. La
+llamada externa activa termina o alcanza su tiempo máximo, pero no se inicia
+otra etapa: el libro sale de `running` y vuelve a la última etapa válida que
+pueda deducirse de los datos guardados. Tampoco se procesan los libros restantes
+ni comienza el barrido posterior de portadas. Solo puede haber una ejecución
+activa por módulo y una instancia del backend por base de datos. Los reintentos
+enviados desde Revisión usan este mismo gestor y aparecen también en
+Orquestación. Al actualizar la página, el panel muestra el tramo solicitado, el
+libro en curso y barras de progreso independientes para el flujo principal y
+las portadas del barrido automático.
 
 Los enlaces y pasos para crear el proyecto de Google Cloud, habilitar Books API,
 restringir la clave y configurar `.env` están en

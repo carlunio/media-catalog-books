@@ -37,19 +37,29 @@ el estado de consolidación ni el del flujo principal.
 
 ## Operación desde el formulario
 
-El selector del formulario incluye todos los elementos incorporados. Cuando uno
-aún
-no tiene ficha, `Crear ficha manual` genera un borrador vacío con los mismos
-campos y valores predeterminados de la ficha habitual. Esto permite completar
-libros que no tengan ISBN o que no hayan pasado por la catalogación automática.
+El selector del formulario incluye todos los elementos incorporados. Cuando la
+fase de Catálogo termina correctamente, crea automáticamente la ficha en estado
+`draft` si todavía no existe. Si el catálogo ya estaba construido y la fase se
+omite, también se comprueba y crea la ficha ausente.
+
+`Crear ficha manual` queda reservado para elementos sin catalogación automática,
+por ejemplo libros que deban completarse directamente. El desplegable
+`Mantenimiento de fichas antiguas` permite recuperar de forma idempotente
+registros catalogados con versiones anteriores o importaciones incompletas. No
+sobrescribe campos ya rellenados.
 
 `Consolidar ficha` guarda primero el formulario completo y pide confirmación
 antes de protegerlo. `Reabrir ficha` devuelve expresamente una ficha
 consolidada a borrador para permitir una corrección. Abrir o guardar el
-formulario no resincroniza automáticamente datos del catálogo; esa acción se
-mantiene como un botón separado y visible.
+formulario no resincroniza automáticamente datos del catálogo. La acción
+`Reiniciar este ítem desde catalogación automática` sigue siendo explícita
+porque sí sustituye los datos editables del borrador.
 
 ## Libros sin ISBN
+
+Cuando se introduce un ISBN válido, la acción
+`Guardar ISBN válido y salir de revisión` comprueba su suma de control, guarda
+el texto OCR y el ISBN, y aprueba la revisión en un solo paso.
 
 En una revisión provocada por ausencia de ISBN, la acción `Aceptar que no tiene
 ISBN y salir de revisión` registra `isbn_missing_accepted_at`. El flujo de
